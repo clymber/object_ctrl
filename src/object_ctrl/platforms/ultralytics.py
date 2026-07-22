@@ -28,6 +28,7 @@ ULTRALYTICS_PRIVACY_SETTINGS = {
     "wandb": False,
     "vscode_msg": False,
     "openvino_msg": False,
+    "datasets_dir": str(PROJECT_ROOT / "datasets" / "sources" / "ultralytics"),
 }
 
 ULTRALYTICS_DATASET_YAML_BASE_URL = (
@@ -89,6 +90,26 @@ def _extract_zip(archive_path: Path, destination: Path) -> None:
         archive.extractall(destination)
 
 
+def _check_data_yaml_ok(data_yaml: Path) -> bool:
+    """
+    Return whether a local data.yaml points to an existing train split.
+    """
+    try:
+        with data_yaml.open() as yaml_file:
+            dataset_config = yaml.safe_load(yaml_file)
+
+        if not isinstance(dataset_config, dict):
+            return False
+
+        dataset_dir = Path(dataset_config.get("path", data_yaml.parent))
+        if not dataset_dir.is_absolute():
+            dataset_dir = data_yaml.parent / dataset_dir
+
+        return _first_split_path(dataset_dir, dataset_config.get("train")).exists()
+    except (FileNotFoundError, TypeError, ValueError, yaml.YAMLError):
+        return False
+
+
 def download(
     dataset_name: str,
     *,
@@ -102,12 +123,16 @@ def download(
     directory instead of Ultralytics' global datasets directory.
     """
     dataset_dir = dataset_path(dataset_name, source_root=source_root)
-    dataset_dir.mkdir(parents=True, exist_ok=True)
+    data_yaml = dataset_dir / "data.yaml"
+
+    if _check_data_yaml_ok(data_yaml):
+        return data_yaml
 
     if yaml_url is None:
         yaml_url = official_dataset_yaml_url(dataset_name)
 
     yaml_name = dataset_name.removesuffix(".yaml").removesuffix(".yml")
+    dataset_dir.mkdir(parents=True, exist_ok=True)
     official_yaml = cache_download(dataset_dir / f"{yaml_name}.official.yaml", yaml_url)
     with official_yaml.open() as yaml_file:
         dataset_config: dict[str, Any] = yaml.safe_load(yaml_file)
@@ -127,7 +152,6 @@ def download(
     dataset_config["path"] = str(dataset_dir)
     dataset_config.pop("download", None)
 
-    data_yaml = dataset_dir / "data.yaml"
     with data_yaml.open("w") as yaml_file:
         yaml.safe_dump(dataset_config, yaml_file, sort_keys=False)
 

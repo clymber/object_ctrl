@@ -13,10 +13,10 @@ datasets/
 
 # YOLO / ML artifacts
 runs/
-models/pretrained/*.pt
-models/pretrained/*.pth
-models/pretrained/*.onnx
-models/pretrained/*.tflite
+models/pretrained/**/*.pt
+models/pretrained/**/*.pth
+models/pretrained/**/*.onnx
+models/pretrained/**/*.tflite
 
 # outputs
 outputs/*
