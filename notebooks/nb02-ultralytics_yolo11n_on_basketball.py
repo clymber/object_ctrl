@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.4
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: objctrl
 #     language: python
@@ -20,6 +20,8 @@ Performance evaluation of pretrained YOLO11 on customized basketball dataset.
 # %load_ext autoreload
 # %autoreload 2
 # %aimport -ultralytics
+
+from pathlib import Path
 
 from object_ctrl import PROJECT_ROOT, configure_stdio_relative_path
 
@@ -49,7 +51,7 @@ DATA_YAML = DATASET_DIR / "composed" / "yolo_basketball_105_22_23" / "data.yaml"
 
 # %%
 project_space = PROJECT_ROOT / "outputs" / "runs" / "basketball"
-project_name = "yolo11n_basketball"
+project_name_base = "yolo11n_basketball"
 basketball_model = YOLO(PRETRAINED_DIR / "yolo11n.pt")
 results = basketball_model.train(
     data=DATA_YAML,
@@ -57,23 +59,39 @@ results = basketball_model.train(
     imgsz=640,
     device=get_device(),
     project=str(project_space),
-    name=project_name
+    name=project_name_base,
 )
+run_dir = Path(results.save_dir)
+print(f"Training run directory: {run_dir}")
 
 
 # %% [markdown]
-# Run completed successfully. YOLO11n trained for 100 epochs on MPS in about 60
-# minutes. Dataset is small: 105 train images with 35 backgrounds, and 22
-# validation images with 7 backgrounds / 18 labeled instances.
+# Run completed successfully. Downstream cells use the actual Ultralytics save
+# directory reported by `results.save_dir`, so plots, metrics, and checkpoint
+# evaluation stay aligned even when Ultralytics increments the run name.
 
 # %% [markdown]
 # ## Plot the training history
 
 # %%
-from pathlib import Path
-
 import matplotlib.pyplot as plt
 import pandas as pd
+
+
+def latest_training_run_dir(project_space, project_name_base):
+    """
+    Return the newest matching Ultralytics training run directory.
+    """
+    candidates = [
+        path
+        for path in project_space.glob(f"{project_name_base}*")
+        if path.is_dir() and (path / "results.csv").exists()
+    ]
+    if not candidates:
+        raise FileNotFoundError(
+            f"No training runs with results.csv found for {project_name_base}."
+        )
+    return max(candidates, key=lambda path: (path / "results.csv").stat().st_mtime)
 
 
 def read_training_history(results_csv):
@@ -129,7 +147,11 @@ def plot_detection_metrics(history):
     return fig, axes
 
 # %%
-history = read_training_history(project_space / project_name / "results.csv")
+if "run_dir" not in globals():
+    run_dir = latest_training_run_dir(project_space, project_name_base)
+
+print(f"Using run directory: {run_dir}")
+history = read_training_history(run_dir / "results.csv")
 
 fig, axes = plot_train_val_losses(history)
 display_img(fig, close=True)
@@ -168,24 +190,45 @@ display_img(fig, close=True)
 
 
 # %% [markdown]
-# ## Inference on test images
+# ## Validation and Test Metrics
 
 # %%
-BEST_MODEL_PATH = project_space / project_name / "weights" / "best.pt"
-test_model = YOLO(BEST_MODEL_PATH)
+BEST_MODEL_PATH = run_dir / "weights" / "best.pt"
+eval_model = YOLO(BEST_MODEL_PATH)
 
-test_metrics = test_model.val(
+validation_metrics = eval_model.val(
     data=DATA_YAML,
     imgsz=640,
     device=get_device(),
+    split="val",
     plots=True,
     project=str(project_space),
-    name=f"{project_name}_test",
+    name=f"{run_dir.name}_val",
+)
+test_metrics = eval_model.val(
+    data=DATA_YAML,
+    imgsz=640,
+    device=get_device(),
+    split="test",
+    plots=True,
+    project=str(project_space),
+    name=f"{run_dir.name}_test",
 )
 
 # %% [markdown]
-# ### Test metrics summary
+# ### Validation metrics summary
 # %%
+print("Validation metrics:")
+aligned_print({
+    "Precision": validation_metrics.box.mp,
+    "Recall": validation_metrics.box.mr,
+    "mAP50": validation_metrics.box.map50,
+    "mAP50-95": validation_metrics.box.map,
+})
+print("\nSpeed ms/image:")
+aligned_print(validation_metrics.speed)
+
+print("\nTest metrics:")
 aligned_print({
     "Precision": test_metrics.box.mp,
     "Recall": test_metrics.box.mr,
@@ -196,12 +239,18 @@ print("\nSpeed ms/image:")
 aligned_print(test_metrics.speed)
 
 # %% [markdown]
-# ### Sample test prediction VS ground truth
+# ### Sample prediction VS ground truth
 
 # %%
+validation_output_dir = Path(validation_metrics.save_dir)
 test_output_dir = Path(test_metrics.save_dir)
 
-print("Ground truth sample images:")
+print("Validation ground truth sample images:")
+display_img(validation_output_dir / "val_batch0_labels.jpg", width=640)
+print("Validation predicted sample images:")
+display_img(validation_output_dir / "val_batch0_pred.jpg", width=640)
+
+print("Test ground truth sample images:")
 display_img(test_output_dir / "val_batch0_labels.jpg", width=640)
-print("Predicted sample images:")
+print("Test predicted sample images:")
 display_img(test_output_dir / "val_batch0_pred.jpg", width=640)
