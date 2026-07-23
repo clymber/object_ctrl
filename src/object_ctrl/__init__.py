@@ -7,6 +7,7 @@ from .config import (
 from .utils.filepath import (
     dir_tree,
     ensure_dir,
+    increment_path,
     relative_to_userhome,
 )
 from .utils.text_stream import aligned_print, set_text_stream_filter
@@ -16,6 +17,7 @@ __all__ = [
     "cache_download",
     "configure_stdio_relative_path",
     "ensure_dir",
+    "increment_path",
     "set_text_stream_filter",
     "get_device",
     "dir_tree",

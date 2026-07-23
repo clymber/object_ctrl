@@ -105,6 +105,23 @@ def dir_tree(
     add_children(root, "", 0)
     return "\n".join(lines)
 
+
+def increment_path(path: Path | str) -> Path:
+    """
+    Return a non-existing path by appending an incrementing numeric suffix.
+    """
+    base_path = Path(path)
+    if not base_path.exists():
+        return base_path
+
+    suffix = 2
+    while True:
+        candidate = base_path.with_name(f"{base_path.name}-{suffix}")
+        if not candidate.exists():
+            return candidate
+        suffix += 1
+
+
 def ensure_dir(path: Path | str) -> Path:
     """
     Ensure that a directory exists, creating it if necessary.

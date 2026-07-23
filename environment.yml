@@ -56,6 +56,13 @@ dependencies:
   - pip:
       - ultralytics
       - ultralytics-thop
+      # YOLOX train/eval dependencies. Install the local YOLOX checkout
+      # separately with --no-build-isolation --no-deps; see README.md.
+      - loguru
+      - thop
+      - ninja
+      - tabulate
+      - tensorboard
       # Match Roboflow's headless OpenCV pin to avoid mixed cv2 versions.
       - opencv-python==4.10.0.84
       - supervision

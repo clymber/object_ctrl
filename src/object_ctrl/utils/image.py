@@ -22,7 +22,7 @@ def display(
     """
     if isinstance(image, (Path, str)):
         image = IPyImage(filename=str(image), width=width)
-    if isinstance(image, Figure):
+    elif isinstance(image, Figure):
         figure = image
         buffer = BytesIO()
         figure.savefig(buffer, format=format, bbox_inches="tight")
@@ -31,13 +31,13 @@ def display(
             import matplotlib.pyplot as plt
 
             plt.close(figure)
-    if isinstance(image, np.ndarray):
+    elif isinstance(image, np.ndarray):
         image = PILImage.fromarray(image)
-    if isinstance(image, PILImage.Image):
+    elif isinstance(image, PILImage.Image):
         buffer = BytesIO()
         image.save(buffer, format=format)
         image = IPyImage(data=buffer.getvalue(), format=format, width=width)
-    if isinstance(image, IPyImage) and width is not None:
+    elif isinstance(image, IPyImage) and width is not None:
         image.width = width
 
     ipy_display(image)
