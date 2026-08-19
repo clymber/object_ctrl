@@ -100,7 +100,7 @@ display(summary.style.hide(axis="index"))
 #
 # The COCO files in the original `ball-tracker-jpjs8` dataset have the same category
 # name twice:
-# ```plaintext
+# ```json
 #   "categories": [{
 #       "id": 0,
 #       "name": "ball",
