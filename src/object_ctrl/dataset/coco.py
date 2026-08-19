@@ -3,6 +3,7 @@ COCO JSON format dataset utilities.
 """
 
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,33 @@ def summarize_coco_dataset(dataset_path: Path | str) -> pd.DataFrame:
     )
 
     return dataset_summary_df
+
+
+def summarize_coco_datasets(
+    ds_paths: Iterable[Path | str],
+) -> pd.DataFrame:
+    """
+    Summarize all COCO datasets in an iterable of dataset paths.
+    """
+    summaries = [summarize_coco_dataset(ds_path) for ds_path in ds_paths]
+    if not summaries:
+        return pd.DataFrame(
+            columns=[
+                "dataset_id",
+                "train",
+                "val",
+                "test",
+                "classes",
+                "labels",
+                "annotations",
+            ]
+        )
+
+    return (
+        pd.concat(summaries, ignore_index=True)
+        .sort_values("dataset_id")
+        .reset_index(drop=True)
+    )
 
 
 def filter_coco_annotation_by_labels(

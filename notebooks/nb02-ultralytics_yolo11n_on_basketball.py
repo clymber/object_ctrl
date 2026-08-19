@@ -22,6 +22,7 @@ Performance evaluation of pretrained YOLO11 on customized basketball dataset.
 # %aimport -ultralytics
 
 from pathlib import Path
+from typing import cast
 
 from object_ctrl import PROJECT_ROOT, configure_stdio_relative_path
 
@@ -53,6 +54,7 @@ DATA_YAML = DATASET_DIR / "composed" / "yolo_basketball_105_22_23" / "data.yaml"
 project_space = PROJECT_ROOT / "outputs" / "runs" / "basketball"
 project_name_base = "yolo11n_basketball"
 basketball_model = YOLO(PRETRAINED_DIR / "yolo11n.pt")
+
 results = basketball_model.train(
     data=DATA_YAML,
     epochs=100,
@@ -61,14 +63,15 @@ results = basketball_model.train(
     project=str(project_space),
     name=project_name_base,
 )
+results = cast(ultralitics_platform.TrainingResult, results)
 run_dir = Path(results.save_dir)
 print(f"Training run directory: {run_dir}")
 
 
 # %% [markdown]
-# Run completed successfully. Downstream cells use the actual Ultralytics save
-# directory reported by `results.save_dir`, so plots, metrics, and checkpoint
-# evaluation stay aligned even when Ultralytics increments the run name.
+# Downstream cells use the actual Ultralytics save directory reported by
+# `results.save_dir`. This keeps plots, metrics, and checkpoint evaluation aligned if
+# Ultralytics increments the run name.
 
 # %% [markdown]
 # ## Plot the training history
@@ -76,22 +79,6 @@ print(f"Training run directory: {run_dir}")
 # %%
 import matplotlib.pyplot as plt
 import pandas as pd
-
-
-def latest_training_run_dir(project_space, project_name_base):
-    """
-    Return the newest matching Ultralytics training run directory.
-    """
-    candidates = [
-        path
-        for path in project_space.glob(f"{project_name_base}*")
-        if path.is_dir() and (path / "results.csv").exists()
-    ]
-    if not candidates:
-        raise FileNotFoundError(
-            f"No training runs with results.csv found for {project_name_base}."
-        )
-    return max(candidates, key=lambda path: (path / "results.csv").stat().st_mtime)
 
 
 def read_training_history(results_csv):
@@ -147,9 +134,6 @@ def plot_detection_metrics(history):
     return fig, axes
 
 # %%
-if "run_dir" not in globals():
-    run_dir = latest_training_run_dir(project_space, project_name_base)
-
 print(f"Using run directory: {run_dir}")
 history = read_training_history(run_dir / "results.csv")
 

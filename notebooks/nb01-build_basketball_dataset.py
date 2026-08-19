@@ -6,9 +6,9 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.4
+#       jupytext_version: 1.19.5
 #   kernelspec:
-#     display_name: yolo-dev
+#     display_name: objctrl
 #     language: python
 #     name: python3
 # ---
@@ -22,14 +22,7 @@ Builds separate datasets for object detection tasks in COCO and YOLO formats.
 # # %aimport -<package>, like %aimport -numpy.
 # %load_ext autoreload
 # %autoreload 2
-# %aimport -csv
-# %aimport -textwrap
-# %aimport -functools
-# %aimport -IPython
-# %aimport -ultralytics
-# %aimport -pandas
-# %aimport -datumaro
-# %aimport -random
+# %aimport -csv -textwrap -functools -IPython -ultralytics -pandas -datumaro -random
 
 from object_ctrl import configure_stdio_relative_path
 
@@ -49,10 +42,11 @@ from object_ctrl.dataset import (
     summarize_coco_dataset,
     summarize_datumaro_label_counts,
 )
+from object_ctrl.dataset.datumaro import ExportFormat as DatumaroExpFmt
+from object_ctrl.dataset.datumaro import ImportFormat as DatumaroImpFmt
 from object_ctrl.platforms import roboflow as roboflow_platform
-from object_ctrl.platforms.roboflow import RoboflowFormat as DatasetFormat
-from object_ctrl.utils.filepath import dir_tree as dir_tree
-from object_ctrl.utils.filepath import ensure_dir
+from object_ctrl.platforms.roboflow import RoboflowFormat
+from object_ctrl.utils.filepath import dir_tree, ensure_dir
 
 # %% [markdown]
 # ## 1. Object detection targets
@@ -65,7 +59,7 @@ OBJ_CTL_LIST_CSV = PROJECT_ROOT / "documents" / "Object_Control_List.csv"
 DATASET_ROOT = PROJECT_ROOT / "datasets"
 
 oc_df = pd.read_csv(OBJ_CTL_LIST_CSV)
-display(oc_df.fillna(""))
+display(oc_df.fillna("/").style.hide(axis="index"))
 
 
 # %% [markdown]
@@ -77,7 +71,7 @@ display(oc_df.fillna(""))
 # %%
 # Source dataset downloaded from Roboflow
 url = "https://universe.roboflow.com/cricket-qnb5l/basketball-xil7x/dataset/1"
-src_ds_basketball = roboflow_platform.download_by_url(url, DatasetFormat.COCO)
+src_ds_basketball = roboflow_platform.download_by_url(url, RoboflowFormat.COCO)
 
 # %% [markdown]
 # ### 2.2 Summary of source dataset
@@ -103,12 +97,18 @@ print(dir_tree(src_ds_basketball.location, max_children=3))
 #
 #
 # #### 2.3.1 Remap labels
+# %%
+src_path, src_format = str(src_ds_basketball.location), DatumaroImpFmt.ROBOFLOW_COCO
+dataset = dm.Dataset.import_from(src_path, src_format)
+
+# %%
+print("Original dataset label summary:")
+display(summarize_datumaro_label_counts(dataset))
+
+# %% [markdown]
 # Remap labels to keep only `ball` and remove all other labels. The `ball` label is
 # remapped to `basketball` to match the target detection category.
 # %%
-dataset = dm.Dataset.import_from(src_ds_basketball.location, "roboflow_coco")
-display(summarize_datumaro_label_counts(dataset))
-
 dataset = dataset.transform(
     "remap_labels",
     mapping={
@@ -119,6 +119,8 @@ dataset = dataset.transform(
     },
     default = "delete"
 )
+print("After remapping labels:")
+display(summarize_datumaro_label_counts(dataset))
 
 # %% [markdown]
 # #### 2.3.2 Compose a new dataset
@@ -160,20 +162,28 @@ print(composed_dataset)
 # Export the sampled dataset into both COCO and YOLO formats, using hardlinks for media
 # files when possible to save disk space.
 # %%
-coco_dataset_dir = ensure_dir(DATASET_ROOT / "composed" / "coco_basketball_105_22_23")
-yolo_dataset_dir = ensure_dir(DATASET_ROOT / "composed" / "yolo_basketball_105_22_23")
+coco_dataset_dir = DATASET_ROOT / "composed" / "coco_basketball_105_22_23"
+yolo_dataset_dir = DATASET_ROOT / "composed" / "yolo_basketball_105_22_23"
 with prefer_hardlinked_datumaro_media():
-    composed_dataset.export(
-        str(coco_dataset_dir),
-        format="coco_instances",
-        save_media=True,
-        reindex=True,
-    )
-    composed_dataset.export(
-        str(yolo_dataset_dir),
-        format="yolo_ultralytics",
-        save_media=True,
-    )
+    if not coco_dataset_dir.exists():
+        ensure_dir(coco_dataset_dir)
+        composed_dataset.export(
+            str(coco_dataset_dir),
+            format=DatumaroExpFmt.COCO_INSTANCES,
+            save_media=True,
+            reindex=True,
+        )
+    else:
+        print(f"COCO dataset already exists at {coco_dataset_dir}")
+    if not yolo_dataset_dir.exists():
+        ensure_dir(yolo_dataset_dir)
+        composed_dataset.export(
+            str(yolo_dataset_dir),
+            format=DatumaroExpFmt.YOLO_ULTRALYTICS,
+            save_media=True,
+        )
+    else:
+        print(f"YOLO dataset already exists at {yolo_dataset_dir}")
 
 # %%
 print(dir_tree(coco_dataset_dir, max_children=3))

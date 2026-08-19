@@ -6,12 +6,53 @@ import os
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
+from enum import StrEnum
 from io import IOBase
 from pathlib import Path
 
 import datumaro as dm
 import pandas as pd
 from datumaro.components import media as datumaro_media
+
+
+class ImportFormat(StrEnum):
+    """
+    Common Datumaro dataset importer plugin names.
+    """
+
+    COCO = "coco"
+    COCO_INSTANCES = "coco_instances"
+    CVAT = "cvat"
+    DATUMARO = "datumaro"
+    IMAGE_DIR = "image_dir"
+    IMAGENET = "imagenet"
+    KITTI = "kitti"
+    LABELME = "label_me"
+    OPEN_IMAGES = "open_images"
+    PASCAL_VOC = "voc"
+    ROBOFLOW_COCO = "roboflow_coco"
+    ROBOFLOW_VOC = "roboflow_voc"
+    ROBOFLOW_YOLO = "roboflow_yolo"
+    YOLO = "yolo"
+
+
+class ExportFormat(StrEnum):
+    """
+    Common Datumaro dataset exporter plugin names.
+    """
+
+    COCO = "coco"
+    COCO_INSTANCES = "coco_instances"
+    CVAT = "cvat"
+    DATUMARO = "datumaro"
+    IMAGE_DIR = "image_dir"
+    IMAGENET = "imagenet"
+    KITTI = "kitti"
+    LABELME = "label_me"
+    OPEN_IMAGES = "open_images"
+    PASCAL_VOC = "voc"
+    YOLO = "yolo"
+    YOLO_ULTRALYTICS = "yolo_ultralytics"
 
 
 def hardlink_or_copy_file(

@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from zipfile import ZipFile
 
 import yaml
@@ -35,6 +35,14 @@ ULTRALYTICS_DATASET_YAML_BASE_URL = (
     "https://raw.githubusercontent.com/ultralytics/ultralytics/main/"
     "ultralytics/cfg/datasets"
 )
+
+
+class TrainingResult(Protocol):
+    """
+    Runtime attributes exposed by Ultralytics training metrics.
+    """
+
+    save_dir: Path
 
 
 def official_dataset_yaml_url(dataset_name: str) -> str:
