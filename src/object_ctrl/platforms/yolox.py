@@ -1511,6 +1511,7 @@ def fit_yolox_tiny(
         """
         nonlocal best_map, curr_map
         eval_model = ema_model.ema if ema_model is not None else model
+        validation_start = time.perf_counter()
         record = evaluate_training_epoch(
             eval_model,
             exp,
@@ -1518,6 +1519,18 @@ def fit_yolox_tiny(
             device,
             completed_epoch,
             train_metrics,
+        )
+        validation_seconds = time.perf_counter() - validation_start
+        epoch_seconds = train_metrics["time/train_s"] + validation_seconds
+        cumulative_seconds = sum(
+            previous.get("time/epoch_s", 0.0) for previous in history
+        )
+        record.update(
+            {
+                "time/val_s": validation_seconds,
+                "time/epoch_s": epoch_seconds,
+                "time/cumulative_s": cumulative_seconds + epoch_seconds,
+            }
         )
         curr_map = record["metrics/mAP50-95(B)"]
         is_best = curr_map > best_map
@@ -1597,6 +1610,7 @@ def fit_yolox_tiny(
             if settings.verbose_output:
                 print(f"Closed mosaic augmentation at epoch {epoch_index + 1}.")
 
+        training_start = time.perf_counter()
         train_metrics = train_one_epoch(
             model,
             optimizer,
@@ -1608,6 +1622,7 @@ def fit_yolox_tiny(
             ema_model,
             settings.show_progress,
         )
+        train_metrics["time/train_s"] = time.perf_counter() - training_start
         completed_epoch = epoch_index + 1
         save_training_state(
             last_path,
@@ -1633,6 +1648,7 @@ def print_epoch_summary(record: dict[str, float]) -> None:
             "recall": record["metrics/recall(B)"],
             "mAP50": record["metrics/mAP50(B)"],
             "mAP50-95": record["metrics/mAP50-95(B)"],
+            "epoch_s": record["time/epoch_s"],
         }
     )
 

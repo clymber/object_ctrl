@@ -366,6 +366,19 @@ def test_resume_completes_pending_validation_before_next_epoch(
 
     assert history["epoch"].tolist() == [1.0, 2.0]
     assert saved_history["epoch"].tolist() == [1.0, 2.0]
+    assert {
+        "time/train_s",
+        "time/val_s",
+        "time/epoch_s",
+        "time/cumulative_s",
+    }.issubset(saved_history.columns)
+    assert (saved_history[["time/train_s", "time/val_s"]] >= 0).all().all()
+    assert saved_history["time/epoch_s"].tolist() == pytest.approx(
+        (saved_history["time/train_s"] + saved_history["time/val_s"]).tolist()
+    )
+    assert saved_history["time/cumulative_s"].tolist() == pytest.approx(
+        saved_history["time/epoch_s"].cumsum().tolist()
+    )
     assert observations == [
         (0, False, False, 0.5),
         (1, True, True, pytest.approx(0.02)),

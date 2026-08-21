@@ -75,8 +75,8 @@ yolox_platform.patch_mps_compatibility()
 os.environ["YOLOX_TINY_PROGRESS"] = "1"
 # os.environ["YOLOX_TINY_SMOKE"] = "1"
 
-RESUME_RUN_DIR: str | None = None
-# RESUME_RUN_DIR = "outputs/runs/basketball/<run-name>"
+# RESUME_RUN_DIR: str | None = None
+RESUME_RUN_DIR = "outputs/runs/basketball/yolox_tiny_basketball_large_dataset"
 
 if RESUME_RUN_DIR is None:
     os.environ.pop("YOLOX_TINY_RESUME_RUN", None)
