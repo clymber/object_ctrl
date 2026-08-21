@@ -28,11 +28,14 @@
 """
 Fine-tune and evaluate YOLOX-Tiny on the large basketball dataset.
 """
-
 # %load_ext autoreload
 # %autoreload 2
+# %aimport -torch, -IPython
 
-from __future__ import annotations
+# %%
+from __future__ import annotations  # noqa: F404
+
+import os
 
 import torch
 from IPython.display import Markdown, display
@@ -59,30 +62,56 @@ yolox_platform.patch_mps_compatibility()
 #
 # Output is quiet by default. Set `YOLOX_TINY_PROGRESS=1` for progress bars or
 # `YOLOX_TINY_VERBOSE=1` for detailed dataset/eval messages and per-epoch logs.
+#
+# A fresh run is the default. To resume one in place, set `RESUME_RUN_DIR` below to its
+# run directory. Relative paths are resolved from the project root. The recoverable
+# `weights/last_ckpt.pth` checkpoint is restored before any further training.
+
+# %%
+# Standard Python environment settings for this notebook.
+# Uncomment values to override the defaults before reading the settings.
+#
+# os.environ["YOLOX_TINY_VERBOSE"] = "1"
+os.environ["YOLOX_TINY_PROGRESS"] = "1"
+# os.environ["YOLOX_TINY_SMOKE"] = "1"
+
+RESUME_RUN_DIR: str | None = None
+# RESUME_RUN_DIR = "outputs/runs/basketball/<run-name>"
+
+if RESUME_RUN_DIR is None:
+    os.environ.pop("YOLOX_TINY_RESUME_RUN", None)
+else:
+    os.environ["YOLOX_TINY_RESUME_RUN"] = RESUME_RUN_DIR
+
 
 # %%
 settings = yolox_platform.training_settings_from_env(default_epochs=100)
 DEVICE = torch.device(get_device())
 
 PRETRAINED_PATH = (
-    ensure_dir(PROJECT_ROOT / "models" / "pretrained" / "yolox")
-    / "yolox_tiny.pth"
+    ensure_dir(PROJECT_ROOT / "models" / "pretrained" / "yolox") / "yolox_tiny.pth"
 )
-DATASET_DIR = (
-    PROJECT_ROOT
-    / "datasets"
-    / "composed"
-    / "coco_basketball_11501_1156_1395"
-)
+DATASET_DIR = PROJECT_ROOT / "datasets" / "composed" / "coco_basketball_11501_1156_1395"
 
 project_space = ensure_dir(PROJECT_ROOT / "outputs" / "runs" / "basketball")
 project_name_base = "yolox_tiny_basketball_large_dataset"
-run_dir = ensure_dir(increment_path(project_space / project_name_base))
+run_mode = settings.run_mode
+
+if run_mode is yolox_platform.RunMode.FRESH:
+    run_dir = ensure_dir(increment_path(project_space / project_name_base))
+else:
+    run_dir = settings.resolved_resume_run_dir
+    resume_checkpoint = run_dir / "weights" / "last_ckpt.pth"
+    if not run_dir.is_dir():
+        raise NotADirectoryError(f"Resume run directory not found: {run_dir}")
+    if not resume_checkpoint.is_file():
+        raise FileNotFoundError(f"Resume checkpoint not found: {resume_checkpoint}")
 project_name = run_dir.name
 
 aligned_print(
     {
         "run_dir": run_dir,
+        "run_mode": run_mode,
         "device": DEVICE,
         "epochs": settings.epochs,
         "batch_size": settings.batch_size,
@@ -152,6 +181,7 @@ history = yolox_platform.fit_yolox_tiny(
     settings,
     DEVICE,
     PROJECT_ROOT,
+    resume=run_mode is yolox_platform.RunMode.RESUME,
 )
 
 # %% [markdown]

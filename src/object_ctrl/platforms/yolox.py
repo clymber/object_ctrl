@@ -12,13 +12,13 @@ import json
 import math
 import os
 import random
-import shutil
 import tempfile
 import time
 import warnings
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
@@ -57,7 +57,7 @@ from yolox.models.yolo_head import YOLOXHead
 import yolox.utils.boxes as yolox_boxes
 from yolox.utils import (LRScheduler, ModelEMA, postprocess,)
 
-from .. import cache_download, ensure_dir
+from .. import PROJECT_ROOT, cache_download, ensure_dir
 from ..utils.json_io import read_json
 
 BASKETBALL_CLASSES = ("basketball",)
@@ -65,6 +65,15 @@ YOLOX_TINY_WEIGHTS_URL = (
     "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/"
     "0.1.1rc0/yolox_tiny.pth"
 )
+
+
+class RunMode(StrEnum):
+    """
+    Supported modes for starting a YOLOX training run.
+    """
+
+    FRESH = "fresh"
+    RESUME = "resume"
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,44 @@ class TrainingSettings:
     smoke_run: bool
     show_progress: bool
     verbose_output: bool
+    resume_run_dir: Path | None = None
+
+    @property
+    def run_mode(self) -> RunMode:
+        """
+        Derive the run mode from the optional resume directory.
+        """
+        if self.resume_run_dir is None:
+            return RunMode.FRESH
+        return RunMode.RESUME
+
+    @property
+    def resolved_resume_run_dir(self) -> Path:
+        """
+        Return the resume directory resolved from the project root.
+        """
+        if self.resume_run_dir is None:
+            raise ValueError("A fresh run does not have a resume directory.")
+        if self.resume_run_dir.is_absolute():
+            return self.resume_run_dir
+        return PROJECT_ROOT / self.resume_run_dir
+
+
+@dataclass(frozen=True)
+class ResumeState:
+    """
+    State restored from a recoverable training checkpoint.
+    """
+
+    completed_epoch: int
+    scheduler_position: int
+    best_map: float
+    curr_map: float
+    history: list[dict[str, float]]
+    mosaic_enabled: bool
+    l1_enabled: bool
+    validation_pending: bool
+    pending_train_metrics: dict[str, float] | None
 
 
 SPLITS = {
@@ -181,6 +228,16 @@ def env_optional_int(name: str, default: int | None) -> int | None:
     return int(value)
 
 
+def env_optional_path(name: str) -> Path | None:
+    """
+    Read an optional filesystem path from the environment.
+    """
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return None
+    return Path(value).expanduser()
+
+
 def training_settings_from_env(
     *,
     default_epochs: int = 100,
@@ -204,6 +261,7 @@ def training_settings_from_env(
         smoke_run=smoke_run,
         show_progress=os.environ.get("YOLOX_TINY_PROGRESS", "0") == "1",
         verbose_output=os.environ.get("YOLOX_TINY_VERBOSE", "0") == "1",
+        resume_run_dir=env_optional_path("YOLOX_TINY_RESUME_RUN"),
     )
 
 
@@ -872,20 +930,195 @@ def save_checkpoint(
     epoch: int,
     best_map: float,
     curr_map: float,
+    *,
+    ema_model: ModelEMA | None,
+    scheduler_position: int,
+    history: Sequence[Mapping[str, float]],
+    mosaic_enabled: bool,
+    l1_enabled: bool,
+    validation_pending: bool,
+    pending_train_metrics: Mapping[str, float] | None,
+    iters_per_epoch: int,
+    max_epoch: int,
+    batch_size: int,
+    image_size: int,
 ) -> None:
     """
-    Save a YOLOX-style checkpoint.
+    Atomically save all state needed to resume a YOLOX training run.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "start_epoch": epoch,
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "best_ap": best_map,
-            "curr_ap": curr_map,
+    checkpoint = {
+        "checkpoint_version": 1,
+        "start_epoch": epoch,
+        "completed_epoch": epoch,
+        "scheduler_position": scheduler_position,
+        "model": model.state_dict(),
+        "ema_model": ema_model.ema.state_dict() if ema_model is not None else None,
+        "ema_updates": ema_model.updates if ema_model is not None else 0,
+        "optimizer": optimizer.state_dict(),
+        "best_ap": best_map,
+        "curr_ap": curr_map,
+        "history": [dict(record) for record in history],
+        "mosaic_enabled": mosaic_enabled,
+        "l1_enabled": l1_enabled,
+        "validation_pending": validation_pending,
+        "pending_train_metrics": (
+            dict(pending_train_metrics)
+            if pending_train_metrics is not None
+            else None
+        ),
+        "training_config": {
+            "iters_per_epoch": iters_per_epoch,
+            "max_epoch": max_epoch,
+            "batch_size": batch_size,
+            "image_size": image_size,
         },
-        path,
+    }
+    atomic_torch_save(checkpoint, path)
+
+
+def atomic_torch_save(checkpoint: Mapping[str, Any], path: Path) -> None:
+    """
+    Write a Torch checkpoint through a same-directory temporary file.
+    """
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            torch.save(dict(checkpoint), temporary_file)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _move_optimizer_state_to_device(
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+) -> None:
+    """
+    Move restored optimizer tensors from CPU to the training device.
+    """
+
+    def move_value(value: Any) -> Any:
+        """
+        Recursively move tensors contained in optimizer state values.
+        """
+        if isinstance(value, torch.Tensor):
+            return value.to(device)
+        if isinstance(value, dict):
+            return {key: move_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [move_value(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(move_value(item) for item in value)
+        return value
+
+    for parameter, state in optimizer.state.items():
+        optimizer.state[parameter] = move_value(state)
+
+
+def restore_checkpoint(
+    path: Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    ema_model: ModelEMA | None,
+    lr_scheduler: LRScheduler,
+    device: torch.device,
+    *,
+    iters_per_epoch: int,
+    max_epoch: int,
+    batch_size: int,
+    image_size: int,
+) -> ResumeState:
+    """
+    Restore and validate a recoverable YOLOX training checkpoint.
+    """
+    checkpoint = torch.load(path, map_location="cpu")
+    if checkpoint.get("checkpoint_version") != 1:
+        raise ValueError(
+            f"Checkpoint is not in the recoverable format: {path}. "
+            "Start a fresh run or provide a Phase 1 checkpoint."
+        )
+
+    expected_config = {
+        "iters_per_epoch": iters_per_epoch,
+        "max_epoch": max_epoch,
+        "batch_size": batch_size,
+        "image_size": image_size,
+    }
+    saved_config = checkpoint.get("training_config")
+    if saved_config != expected_config:
+        raise ValueError(
+            "Resume settings do not match the checkpoint: "
+            f"saved={saved_config}, requested={expected_config}."
+        )
+
+    model.load_state_dict(checkpoint["model"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
+    _move_optimizer_state_to_device(optimizer, device)
+
+    saved_ema = checkpoint["ema_model"]
+    if ema_model is None and saved_ema is not None:
+        raise ValueError("Checkpoint uses EMA, but the current experiment does not.")
+    if ema_model is not None and saved_ema is None:
+        raise ValueError("Checkpoint has no EMA state for this EMA-enabled experiment.")
+    if ema_model is not None:
+        ema_model.ema.load_state_dict(saved_ema)
+        ema_model.updates = int(checkpoint["ema_updates"])
+
+    completed_epoch = int(checkpoint["completed_epoch"])
+    scheduler_position = int(checkpoint["scheduler_position"])
+    expected_position = completed_epoch * iters_per_epoch
+    if scheduler_position != expected_position:
+        raise ValueError(
+            "Checkpoint scheduler position is inconsistent with its completed epoch: "
+            f"{scheduler_position} != {expected_position}."
+        )
+
+    restored_lr = lr_scheduler.update_lr(scheduler_position)
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = restored_lr
+
+    history = [dict(record) for record in checkpoint["history"]]
+    validation_pending = bool(checkpoint["validation_pending"])
+    expected_history_length = completed_epoch - int(validation_pending)
+    if len(history) != expected_history_length:
+        raise ValueError(
+            "Checkpoint history is inconsistent with its completed epoch: "
+            f"{len(history)} rows for epoch {completed_epoch}."
+        )
+
+    pending_train_metrics = checkpoint["pending_train_metrics"]
+    if validation_pending and pending_train_metrics is None:
+        raise ValueError("Pending validation checkpoint has no training metrics.")
+    if not validation_pending and pending_train_metrics is not None:
+        raise ValueError(
+            "Completed checkpoint unexpectedly has pending training metrics."
+        )
+
+    return ResumeState(
+        completed_epoch=completed_epoch,
+        scheduler_position=scheduler_position,
+        best_map=float(checkpoint["best_ap"]),
+        curr_map=float(checkpoint["curr_ap"]),
+        history=history,
+        mosaic_enabled=bool(checkpoint["mosaic_enabled"]),
+        l1_enabled=bool(checkpoint["l1_enabled"]),
+        validation_pending=validation_pending,
+        pending_train_metrics=(
+            dict(pending_train_metrics)
+            if pending_train_metrics is not None
+            else None
+        ),
     )
 
 
@@ -1084,6 +1317,94 @@ def train_one_epoch(
     return averaged_losses
 
 
+def apply_training_phase(
+    train_loader: DataLoader,
+    model: torch.nn.Module,
+    ema_model: ModelEMA | None,
+    *,
+    mosaic_enabled: bool,
+    l1_enabled: bool,
+) -> None:
+    """
+    Apply the saved mosaic and L1 phase to the loader and model copies.
+    """
+    if not mosaic_enabled:
+        train_loader.close_mosaic()
+
+    cast(YOLOXHead, model.head).use_l1 = l1_enabled
+    if ema_model is not None:
+        cast(YOLOXHead, ema_model.ema.head).use_l1 = l1_enabled
+
+
+def evaluate_training_epoch(
+    eval_model: torch.nn.Module,
+    exp: BasketballTinyExp,
+    settings: TrainingSettings,
+    device: torch.device,
+    epoch: int,
+    train_metrics: Mapping[str, float],
+) -> dict[str, float]:
+    """
+    Validate one trained epoch and combine its training and validation metrics.
+    """
+    val_losses = evaluate_losses(
+        eval_model,
+        exp,
+        "val",
+        settings.batch_size,
+        device,
+        progress=settings.show_progress,
+        verbose=settings.verbose_output,
+    )
+    val_metrics = evaluate_model(
+        eval_model,
+        exp,
+        "val",
+        settings.batch_size,
+        device,
+        verbose=settings.verbose_output,
+    )
+    return {
+        "epoch": epoch,
+        **train_metrics,
+        **val_losses,
+        "metrics/precision(B)": val_metrics["metrics/precision(B)"],
+        "metrics/recall(B)": val_metrics["metrics/recall(B)"],
+        "metrics/mAP50(B)": val_metrics["metrics/mAP50(B)"],
+        "metrics/mAP50-95(B)": val_metrics["metrics/mAP50-95(B)"],
+        "speed/forward_ms": val_metrics["speed/forward_ms"],
+        "speed/nms_ms": val_metrics["speed/nms_ms"],
+    }
+
+
+def write_training_history(
+    path: Path,
+    history: Sequence[Mapping[str, float]],
+) -> None:
+    """
+    Atomically replace the CSV representation of the checkpoint history.
+    """
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            encoding="utf-8",
+            newline="",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            pd.DataFrame(history).to_csv(temporary_file, index=False)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def fit_yolox_tiny(
     exp: BasketballTinyExp,
     checkpoint_path: Path,
@@ -1093,6 +1414,8 @@ def fit_yolox_tiny(
     device: torch.device,
     project_root: Path,
     class_names: tuple[str, ...] = BASKETBALL_CLASSES,
+    *,
+    resume: bool = False,
 ) -> pd.DataFrame:
     """
     Fine-tune YOLOX-Tiny and save history/checkpoint artifacts.
@@ -1101,22 +1424,24 @@ def fit_yolox_tiny(
     output_dir.mkdir(parents=True, exist_ok=True)
     weights_dir = ensure_dir(output_dir / "weights")
     history_path = output_dir / "results.csv"
-    write_run_metadata(
-        output_dir / "args.yaml",
-        exp,
-        dataset_dir,
-        checkpoint_path,
-        class_names,
-        device,
-        settings,
-        project_root,
-    )
+    if not resume:
+        write_run_metadata(
+            output_dir / "args.yaml",
+            exp,
+            dataset_dir,
+            checkpoint_path,
+            class_names,
+            device,
+            settings,
+            project_root,
+        )
 
     for attr in ("model", "optimizer"):
         discard_cached_exp_attribute(exp, attr)
 
     model = exp.get_model()
-    model = load_pretrained_weights(model, checkpoint_path)
+    if not resume:
+        model = load_pretrained_weights(model, checkpoint_path)
     model.to(device)
 
     optimizer = exp.get_optimizer(settings.batch_size)
@@ -1140,20 +1465,135 @@ def fit_yolox_tiny(
 
     history: list[dict[str, float]] = []
     best_map = -1.0
+    curr_map = -1.0
     best_path = weights_dir / "best_ckpt.pth"
     last_path = weights_dir / "last_ckpt.pth"
-    no_aug_started = False
+    mosaic_enabled = True
+    l1_enabled = False
+    start_epoch = 0
 
-    for epoch_index in range(exp.max_epoch):
+    def save_training_state(
+        path: Path,
+        completed_epoch: int,
+        *,
+        validation_pending: bool,
+        pending_train_metrics: Mapping[str, float] | None,
+    ) -> None:
+        """
+        Save the current trainer state with the run's fixed configuration.
+        """
+        save_checkpoint(
+            path,
+            model,
+            optimizer,
+            completed_epoch,
+            best_map,
+            curr_map,
+            ema_model=ema_model,
+            scheduler_position=completed_epoch * iters_per_epoch,
+            history=history,
+            mosaic_enabled=mosaic_enabled,
+            l1_enabled=l1_enabled,
+            validation_pending=validation_pending,
+            pending_train_metrics=pending_train_metrics,
+            iters_per_epoch=iters_per_epoch,
+            max_epoch=exp.max_epoch,
+            batch_size=settings.batch_size,
+            image_size=settings.image_size,
+        )
+
+    def finish_validation(
+        completed_epoch: int,
+        train_metrics: Mapping[str, float],
+    ) -> None:
+        """
+        Validate a trained epoch and commit its best, last, and history artifacts.
+        """
+        nonlocal best_map, curr_map
+        eval_model = ema_model.ema if ema_model is not None else model
+        record = evaluate_training_epoch(
+            eval_model,
+            exp,
+            settings,
+            device,
+            completed_epoch,
+            train_metrics,
+        )
+        curr_map = record["metrics/mAP50-95(B)"]
+        is_best = curr_map > best_map
+        best_map = max(best_map, curr_map)
+        history.append(record)
+
+        if is_best:
+            save_training_state(
+                best_path,
+                completed_epoch,
+                validation_pending=False,
+                pending_train_metrics=None,
+            )
+        save_training_state(
+            last_path,
+            completed_epoch,
+            validation_pending=False,
+            pending_train_metrics=None,
+        )
+        write_training_history(history_path, history)
+        if settings.verbose_output:
+            print_epoch_summary(record)
+
+    if resume:
+        if not last_path.is_file():
+            raise FileNotFoundError(f"Resume checkpoint not found: {last_path}")
+        restored = restore_checkpoint(
+            last_path,
+            model,
+            optimizer,
+            ema_model,
+            lr_scheduler,
+            device,
+            iters_per_epoch=iters_per_epoch,
+            max_epoch=exp.max_epoch,
+            batch_size=settings.batch_size,
+            image_size=settings.image_size,
+        )
+        history = restored.history
+        best_map = restored.best_map
+        curr_map = restored.curr_map
+        mosaic_enabled = restored.mosaic_enabled
+        l1_enabled = restored.l1_enabled
+        start_epoch = restored.completed_epoch
+        apply_training_phase(
+            train_loader,
+            model,
+            ema_model,
+            mosaic_enabled=mosaic_enabled,
+            l1_enabled=l1_enabled,
+        )
+        write_training_history(history_path, history)
+
+        if restored.validation_pending:
+            if settings.verbose_output:
+                print(f"Completing validation for epoch {start_epoch}.")
+            finish_validation(
+                start_epoch,
+                cast(dict[str, float], restored.pending_train_metrics),
+            )
+
+    for epoch_index in range(start_epoch, exp.max_epoch):
         if (
             exp.no_aug_epochs > 0
             and epoch_index >= exp.max_epoch - exp.no_aug_epochs
-            and not no_aug_started
+            and mosaic_enabled
         ):
-            train_loader.close_mosaic()
-            model_head = cast(YOLOXHead, model.head)
-            model_head.use_l1 = True
-            no_aug_started = True
+            mosaic_enabled = False
+            l1_enabled = True
+            apply_training_phase(
+                train_loader,
+                model,
+                ema_model,
+                mosaic_enabled=mosaic_enabled,
+                l1_enabled=l1_enabled,
+            )
             if settings.verbose_output:
                 print(f"Closed mosaic augmentation at epoch {epoch_index + 1}.")
 
@@ -1168,53 +1608,14 @@ def fit_yolox_tiny(
             ema_model,
             settings.show_progress,
         )
-
-        eval_model = ema_model.ema if ema_model is not None else model
-        val_losses = evaluate_losses(
-            eval_model,
-            exp,
-            "val",
-            settings.batch_size,
-            device,
-            progress=settings.show_progress,
-            verbose=settings.verbose_output,
-        )
-        val_metrics = evaluate_model(
-            eval_model,
-            exp,
-            "val",
-            settings.batch_size,
-            device,
-            verbose=settings.verbose_output,
-        )
-        curr_map = val_metrics["metrics/mAP50-95(B)"]
-        best_map = max(best_map, curr_map)
-        record = {
-            "epoch": epoch_index + 1,
-            **train_metrics,
-            **val_losses,
-            "metrics/precision(B)": val_metrics["metrics/precision(B)"],
-            "metrics/recall(B)": val_metrics["metrics/recall(B)"],
-            "metrics/mAP50(B)": val_metrics["metrics/mAP50(B)"],
-            "metrics/mAP50-95(B)": val_metrics["metrics/mAP50-95(B)"],
-            "speed/forward_ms": val_metrics["speed/forward_ms"],
-            "speed/nms_ms": val_metrics["speed/nms_ms"],
-        }
-        history.append(record)
-        pd.DataFrame(history).to_csv(history_path, index=False)
-
-        save_checkpoint(
+        completed_epoch = epoch_index + 1
+        save_training_state(
             last_path,
-            eval_model,
-            optimizer,
-            epoch_index + 1,
-            best_map,
-            curr_map,
+            completed_epoch,
+            validation_pending=True,
+            pending_train_metrics=train_metrics,
         )
-        if curr_map >= best_map:
-            shutil.copyfile(last_path, best_path)
-        if settings.verbose_output:
-            print_epoch_summary(record)
+        finish_validation(completed_epoch, train_metrics)
 
     return pd.DataFrame(history)
 
@@ -1247,7 +1648,8 @@ def load_trained_model(
     discard_cached_exp_attribute(exp, "model")
     model = exp.get_model()
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    model.load_state_dict(checkpoint["model"])
+    model_state = checkpoint.get("ema_model") or checkpoint["model"]
+    model.load_state_dict(model_state)
     model.to(device)
     model.eval()
     return model
