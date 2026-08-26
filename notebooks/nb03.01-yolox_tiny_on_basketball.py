@@ -40,10 +40,10 @@ from IPython.display import Markdown, display
 
 from object_ctrl import (
     PROJECT_ROOT,
+    Device,
     aligned_print,
     configure_stdio_relative_path,
     ensure_dir,
-    get_device,
     increment_path,
 )
 from object_ctrl.platforms import yolox as yolox_platform
@@ -63,7 +63,7 @@ yolox_platform.patch_mps_compatibility()
 
 # %%
 settings = yolox_platform.training_settings_from_env(default_epochs=150)
-DEVICE = torch.device(get_device())
+DEVICE = torch.device(Device.auto_choose())
 
 PRETRAINED_PATH = (
     ensure_dir(PROJECT_ROOT / "models" / "pretrained" / "yolox")

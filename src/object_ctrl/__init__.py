@@ -1,8 +1,8 @@
 from .config import (
     PROJECT_ROOT,
+    Device,
     configure_stdio_relative_path,
     find_project_root,
-    get_device,
 )
 from .utils.filepath import (
     dir_tree,
@@ -16,10 +16,10 @@ from .utils.urlhelper import cache_download
 __all__ = [
     "cache_download",
     "configure_stdio_relative_path",
+    "Device",
     "ensure_dir",
     "increment_path",
     "set_text_stream_filter",
-    "get_device",
     "dir_tree",
     "find_project_root",
     "aligned_print",

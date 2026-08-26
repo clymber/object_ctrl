@@ -31,9 +31,9 @@ configure_stdio_relative_path()
 
 # %%
 from object_ctrl import (
+    Device,
     aligned_print,
     ensure_dir,
-    get_device,
 )
 from object_ctrl.platforms import ultralytics as ultralitics_platform
 from object_ctrl.utils.image import display as display_img
@@ -67,7 +67,7 @@ if resume_checkpoint is None:
         data=DATA_YAML,
         epochs=100,
         imgsz=640,
-        device=get_device(),
+        device=Device.auto_choose(),
         project=str(project_space),
         name=project_name_base,
         patience=25,
@@ -82,7 +82,7 @@ else:
     basketball_model = YOLO(resume_checkpoint)
     results = basketball_model.train(
         resume=True,
-        device=get_device(),
+        device=Device.auto_choose(),
         batch=16,
         workers=8,
         cache=False,
@@ -214,7 +214,7 @@ eval_model = YOLO(BEST_MODEL_PATH)
 validation_metrics = eval_model.val(
     data=DATA_YAML,
     imgsz=640,
-    device=get_device(),
+    device=Device.auto_choose(),
     split="val",
     plots=True,
     project=str(project_space),
@@ -223,7 +223,7 @@ validation_metrics = eval_model.val(
 test_metrics = eval_model.val(
     data=DATA_YAML,
     imgsz=640,
-    device=get_device(),
+    device=Device.auto_choose(),
     split="test",
     plots=True,
     project=str(project_space),
