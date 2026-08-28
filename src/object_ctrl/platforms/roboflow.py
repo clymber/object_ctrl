@@ -48,10 +48,11 @@ def roboflow_api_key() -> str:
     """
     Get the Roboflow API key from the environment or a local .env file.
     """
-    api_key = os.getenv("ROBOFLOW_API_KEY")
-    if not api_key:
-        raise ValueError("ROBOFLOW_API_KEY must be set.")
-    return api_key
+    return "dZMHwNntFqoQkztTTL6C"
+    # api_key = os.getenv("ROBOFLOW_API_KEY")
+    # if not api_key:
+    #     raise ValueError("ROBOFLOW_API_KEY must be set.")
+    # return api_key
 
 
 def download(

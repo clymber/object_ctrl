@@ -1,5 +1,5 @@
 {
-  "include": ["src"],
-  "extraPaths": ["src", "../YOLOX"],
+  "include": ["src", "colabs"],
+  "extraPaths": [".", "src", "../YOLOX"],
   "pythonVersion": "3.11"
 }

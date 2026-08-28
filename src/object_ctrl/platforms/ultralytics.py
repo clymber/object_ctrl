@@ -15,7 +15,7 @@ import yaml
 from ..config import PROJECT_ROOT
 from ..utils.urlhelper import cache_download
 
-ULTRALYTICS_PRIVACY_SETTINGS = {
+ULTRALYTICS_PRIVACY_SETTINGS: dict[str, Any] = {
     "sync": False,
     "hub": False,
     "clearml": False,
@@ -170,8 +170,8 @@ def configure_privacy(
     *,
     offline: bool = True,
     config_dir: Path | str | None = PROJECT_ROOT / "outputs" / "ultralytics",
-    settings_overrides: Mapping[str, bool] | None = None,
-) -> dict[str, bool]:
+    settings_overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Disable Ultralytics telemetry and optional experiment integrations.
 
@@ -188,8 +188,18 @@ def configure_privacy(
 
     from ultralytics import settings
 
-    updates = dict(ULTRALYTICS_PRIVACY_SETTINGS)
+    supported_keys = set(getattr(settings, "defaults", settings))
+    updates = {
+        key: value
+        for key, value in ULTRALYTICS_PRIVACY_SETTINGS.items()
+        if key in supported_keys
+    }
+
     if settings_overrides is not None:
+        unsupported_keys = set(settings_overrides) - supported_keys
+        if unsupported_keys:
+            unsupported_text = ", ".join(sorted(unsupported_keys))
+            raise KeyError(f"Unsupported Ultralytics settings: {unsupported_text}")
         updates.update(settings_overrides)
 
     settings.update(updates)

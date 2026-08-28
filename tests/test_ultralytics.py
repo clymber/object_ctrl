@@ -1,10 +1,62 @@
+import sys
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import Mock
 from zipfile import ZipFile
 
 import pytest
 import yaml
 
 from object_ctrl.platforms import ultralytics
+
+
+def test_configure_privacy_skips_settings_removed_by_ultralytics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Apply compatible privacy defaults when an installed schema omits old keys.
+    """
+    settings = Mock()
+    settings.defaults = {
+        "datasets_dir": "datasets",
+        "sync": True,
+        "wandb": True,
+    }
+    ultralytics_module = ModuleType("ultralytics")
+    ultralytics_module.settings = settings
+    monkeypatch.setitem(sys.modules, "ultralytics", ultralytics_module)
+
+    updates = ultralytics.configure_privacy(config_dir=tmp_path)
+
+    assert updates == {
+        "sync": False,
+        "wandb": False,
+        "datasets_dir": str(ultralytics.PROJECT_ROOT / "datasets/sources/ultralytics"),
+    }
+    settings.update.assert_called_once_with(updates)
+
+
+def test_configure_privacy_rejects_unsupported_explicit_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Report unsupported caller overrides rather than silently hiding mistakes.
+    """
+    settings = Mock()
+    settings.defaults = {"sync": True}
+    ultralytics_module = ModuleType("ultralytics")
+    ultralytics_module.settings = settings
+    monkeypatch.setitem(sys.modules, "ultralytics", ultralytics_module)
+
+    with pytest.raises(KeyError, match="unknown_setting"):
+        ultralytics.configure_privacy(
+            config_dir=tmp_path,
+            settings_overrides={"unknown_setting": False},
+        )
+
+    settings.update.assert_not_called()
 
 
 def test_ultralytics_dataset_path_uses_project_source_directory(
