@@ -6,6 +6,7 @@ function usage() {
     printf '  -h, --help      Show this help message and exit\n'
     printf '  -c, --copy      Copy files to remote (default)\n'
     printf '  -s, --sync      Sync files to remote (delete extra files in remote)\n'
+    printf '  -n, --dry-run   Perform a trial run with no changes made\n'
 }
 
 function build_exclude_options() {
@@ -66,6 +67,7 @@ function build_exclude_options() {
 
 function parse_arguments() {
     rclone_cmd=""
+    dry_run=""
 
     while [[ $# -gt 0 ]]; do
         case "${1}" in
@@ -79,6 +81,10 @@ function parse_arguments() {
                     exit 1
                 fi
                 rclone_cmd="copy"
+                shift
+                ;;
+            -n|--dry-run)
+                dry_run="--dry-run"
                 shift
                 ;;
             -s|--sync)
@@ -129,4 +135,5 @@ build_exclude_options
 
 rclone "${rclone_cmd}" "${repo_dir}" "${remote}":"${repo_name}" \
     "${exclude_options[@]}" \
+    "${dry_run}" \
     -P

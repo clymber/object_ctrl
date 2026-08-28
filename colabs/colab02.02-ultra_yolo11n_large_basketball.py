@@ -82,13 +82,17 @@ if not DATA_YAML.exists():
 # %%
 project_space = PROJECT_ROOT / "outputs" / "runs" / "basketball"
 project_name_base = "yolo11n_basketball_large_dataset"
-resume_checkpoint: Path | None = None
-# resume_checkpoint: Path | None = (
-#     project_space
-#     / "yolo11n_basketball_large_dataset-2"
-#     / "weights"
-#     / "last.pt"
-# )
+# resume_checkpoint: Path | None = None
+resume_checkpoint: Path | None = (
+    project_space
+    / "yolo11n_basketball_large_dataset-4"
+    / "weights"
+    / "last.pt"
+)
+
+BATCH_SIZE = 32
+N_WORKERS = 8
+CACHE_DATA = False
 
 if resume_checkpoint is None:
     basketball_model = YOLO(PRETRAINED_DIR / "yolo11n.pt")
@@ -100,9 +104,9 @@ if resume_checkpoint is None:
         project=str(project_space),
         name=project_name_base,
         patience=25,
-        batch=16,
-        workers=8,
-        cache=False,
+        batch=BATCH_SIZE,
+        workers=N_WORKERS,
+        cache=CACHE_DATA,
     )
 else:
     if not resume_checkpoint.is_file():
@@ -112,9 +116,9 @@ else:
     results = basketball_model.train(
         resume=True,
         device=Device.auto_choose(),
-        batch=16,
-        workers=8,
-        cache=False,
+        batch=BATCH_SIZE,
+        workers=N_WORKERS,
+        cache=CACHE_DATA,
     )
 results = cast(ultralitics_platform.TrainingResult, results)
 run_dir = Path(results.save_dir)
