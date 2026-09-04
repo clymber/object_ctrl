@@ -18,9 +18,9 @@ In a typical Renku session, it is:
 ~/work/object_ctrl/notebooks
 ```
 
-Do not create or maintain Renku-specific notebook copies under
-`notebooks-renku/`. The setup script generates paired, ignored `.ipynb` files
-beside the existing `notebooks/*.py` sources.
+Do not create or maintain separate Renku-specific notebook copies. The setup
+script generates paired, ignored `.ipynb` files beside the existing
+`notebooks/*.py` sources.
 
 ## Set up a Renku session
 
@@ -38,7 +38,7 @@ beside the existing `notebooks/*.py` sources.
 
    ```bash
    cd ~/work/object_ctrl
-   bash notebooks-renku/setup_renku.sh 2>&1 | tee setup_renku.log
+   bash scripts/setup_renku.sh 2>&1 | tee setup_renku.log
    ```
 
 The script:

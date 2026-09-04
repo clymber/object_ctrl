@@ -5,8 +5,9 @@ set -Eeuo pipefail
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
-readonly REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
-readonly CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints-renku.txt"
+readonly RENKU_SETUP_DIR="${SCRIPT_DIR}/renku"
+readonly REQUIREMENTS_FILE="${RENKU_SETUP_DIR}/requirements.txt"
+readonly CONSTRAINTS_FILE="${RENKU_SETUP_DIR}/constraints.txt"
 readonly RENKU_HOST_VENV_PATH="${VIRTUAL_ENV:-${HOME}/work/.venv}"
 readonly PROJECT_VENV_PATH="${OBJCTRL_RENKU_VENV:-${PROJECT_ROOT}/.venv-renku}"
 readonly HOST_PYTHON_BIN="${RENKU_HOST_VENV_PATH}/bin/python"
