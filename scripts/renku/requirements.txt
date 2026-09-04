@@ -6,6 +6,7 @@ wheel
 ipykernel
 jupytext
 ipywidgets
+nbconvert
 
 # Scientific and data runtime.
 numpy

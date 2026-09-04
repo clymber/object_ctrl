@@ -399,6 +399,7 @@ import ipywidgets
 import jupytext
 import loguru
 import matplotlib
+import nbconvert
 import ninja
 import numpy
 import object_ctrl
@@ -466,6 +467,7 @@ distribution_names = (
     "datumaro",
     "ipywidgets",
     "jupytext",
+    "nbconvert",
     "numpy",
     "object_ctrl",
     "onnx",
@@ -487,6 +489,8 @@ for name in distribution_names:
 print(f"object_ctrl root={object_ctrl.PROJECT_ROOT}")
 print(f"YOLOX helper={object_ctrl_yolox.__name__}")
 PY
+[[ -x "${PROJECT_VENV_PATH}/bin/jupyter-nbconvert" ]] || \
+    die "The project environment does not provide jupyter-nbconvert."
 validate_torch_stack
 
 log "Registering the isolated environment as a Jupyter kernel"
