@@ -27,7 +27,6 @@ outputs/*
 data/raw/
 data/external/
 data/processed/
-composed_datasets.tgz
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -125,6 +124,7 @@ celerybeat.pid
 .env
 .envrc
 .venv
+.venv-renku/
 env/
 venv/
 ENV/

@@ -26,11 +26,11 @@ $(NOTEBOOK_STAMP_DIR):
 	mkdir -p $@
 
 $(NOTEBOOK_DIR)/%.ipynb: $(NOTEBOOK_DIR)/%.py jupytext.toml
-	source ./env_setup.sh && jupytext --sync $<
+	source ./scripts/env_setup.sh && jupytext --sync $<
 
 $(NOTEBOOK_STAMP_DIR)/%.executed: $(NOTEBOOK_DIR)/%.ipynb \
   $(THIS_MAKEFILE) | $(NOTEBOOK_STAMP_DIR)
-	source ./env_setup.sh && jupyter nbconvert $< \
+	source ./scripts/env_setup.sh && jupyter nbconvert $< \
 		--to notebook \
 		--execute \
 		--inplace \

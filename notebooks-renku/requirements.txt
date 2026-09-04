@@ -3,11 +3,12 @@ setuptools>=69
 wheel
 
 # Helpers missing from Renku's existing Jupyter environment.
+ipykernel
 jupytext
 ipywidgets
 
 # Scientific and data runtime.
-numpy<2.2
+numpy
 pandas
 matplotlib
 scipy
@@ -22,18 +23,16 @@ pycocotools
 python-dotenv
 
 # Object-detection runtimes and YOLOX support packages.
-ultralytics
+ultralytics-opencv-headless
 ultralytics-thop
 loguru
 thop
 ninja
 tabulate
 tensorboard
+onnx
+onnx-simplifier
 
-# Roboflow requires the headless distribution, while the training packages
-# require the regular distribution. Keep both at the same cv2 version.
-opencv-python==4.10.0.84
-opencv-python-headless==4.10.0.84
-supervision
+opencv-python-headless
 roboflow
 datumaro

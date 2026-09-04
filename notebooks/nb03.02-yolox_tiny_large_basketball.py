@@ -52,7 +52,10 @@ from object_ctrl.platforms import yolox as yolox_platform
 from object_ctrl.utils.image import display as display_img
 
 configure_stdio_relative_path()
-yolox_platform.patch_mps_compatibility()
+
+DEVICE = torch.device(Device.auto_choose())
+if DEVICE.type == "mps":
+    yolox_platform.patch_mps_compatibility()
 
 # %% [markdown]
 # ## Experiment Setup
@@ -75,8 +78,8 @@ yolox_platform.patch_mps_compatibility()
 os.environ["YOLOX_TINY_PROGRESS"] = "1"
 # os.environ["YOLOX_TINY_SMOKE"] = "1"
 
-# RESUME_RUN_DIR: str | None = None
-RESUME_RUN_DIR = "outputs/runs/basketball/yolox_tiny_basketball_large_dataset"
+RESUME_RUN_DIR: str | None = None
+# RESUME_RUN_DIR = "outputs/runs/basketball/yolox_tiny_basketball_large_dataset"
 
 if RESUME_RUN_DIR is None:
     os.environ.pop("YOLOX_TINY_RESUME_RUN", None)
@@ -86,7 +89,6 @@ else:
 
 # %%
 settings = yolox_platform.training_settings_from_env(default_epochs=100)
-DEVICE = torch.device(Device.auto_choose())
 
 PRETRAINED_PATH = (
     ensure_dir(PROJECT_ROOT / "models" / "pretrained" / "yolox") / "yolox_tiny.pth"

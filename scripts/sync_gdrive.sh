@@ -122,7 +122,7 @@ function parse_arguments() {
 
 remote="gdrive"
 
-repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || {
+repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)" || {
     printf 'Error: cannot determine repository directory\n' >&2
     exit 1
 }

@@ -2,5 +2,4 @@
 formats = [
     "notebooks///ipynb,notebooks///py:percent",
     "colabs///ipynb,colabs///py:percent",
-    "notebooks-renku///ipynb,notebooks-renku///py:percent",
 ]

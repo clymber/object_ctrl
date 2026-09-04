@@ -21,6 +21,7 @@ Performance evaluation of pretrained YOLO11 on customized basketball dataset.
 # %autoreload 2
 # %aimport -ultralytics
 
+import os
 from pathlib import Path
 from typing import cast
 
@@ -53,13 +54,19 @@ DATA_YAML = DATASET_DIR / "composed" / "yolo_basketball_11501_1156_1395" / "data
 # %%
 project_space = PROJECT_ROOT / "outputs" / "runs" / "basketball"
 project_name_base = "yolo11n_basketball_large_dataset"
-# resume_checkpoint: Path | None = None
-resume_checkpoint: Path | None = (
-    project_space
-    / "yolo11n_basketball_large_dataset-2"
-    / "weights"
-    / "last.pt"
-)
+# Avoid container shared-memory exhaustion by default. Hosts with a larger /dev/shm
+# allocation can set ULTRALYTICS_WORKERS to a positive integer.
+DATALOADER_WORKERS = int(os.environ.get("ULTRALYTICS_WORKERS", "0"))
+if DATALOADER_WORKERS < 0:
+    raise ValueError("ULTRALYTICS_WORKERS must be zero or greater")
+
+resume_checkpoint: Path | None = None
+# resume_checkpoint: Path | None = (
+#     project_space
+#     / "yolo11n_basketball_large_dataset-2"
+#     / "weights"
+#     / "last.pt"
+# )
 
 if resume_checkpoint is None:
     basketball_model = YOLO(PRETRAINED_DIR / "yolo11n.pt")
@@ -72,7 +79,7 @@ if resume_checkpoint is None:
         name=project_name_base,
         patience=25,
         batch=16,
-        workers=8,
+        workers=DATALOADER_WORKERS,
         cache=False,
     )
 else:
@@ -84,7 +91,7 @@ else:
         resume=True,
         device=Device.auto_choose(),
         batch=16,
-        workers=8,
+        workers=DATALOADER_WORKERS,
         cache=False,
     )
 results = cast(ultralitics_platform.TrainingResult, results)
