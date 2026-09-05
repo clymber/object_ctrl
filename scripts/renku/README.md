@@ -52,6 +52,21 @@ The script:
 
 The setup is safe to run again after pulling dependency or notebook changes.
 
+## Activate the Renku terminal environment
+
+After setup, source the activation script in each new terminal shell:
+
+```bash
+source scripts/activate_renku_env.sh
+```
+
+This activates `.venv-renku`, selects the registered Renku notebook kernel,
+prevents user-installed Python packages from leaking into the environment, and
+adds the project's `scripts/` directory to `PATH`.
+
+`scripts/tmux_notebook.sh run` sources this activation script automatically,
+so detached notebook execution does not require prior shell activation.
+
 ## Run a notebook
 
 1. In Renku's file browser, open a generated notebook under `notebooks/`, for

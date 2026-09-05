@@ -109,12 +109,13 @@ conda run -n objctrl pip install onnx onnxsim
 
 ### Shell environment setup
 
-There's also a shell environment setup script, `scripts/env_setup.sh`, available
-for the convenience of application runtime. Activate it and load the project
-runtime environment variables:
+There's also a local environment activation script,
+`scripts/activate_local_env.sh`, available for the convenience of application
+runtime. Source it to activate Conda and load the project runtime environment
+variables:
 
 ```bash
-source scripts/env_setup.sh
+source scripts/activate_local_env.sh
 ```
 
 Google Colab is not a convenient target at this stage. The repo keeps notebooks

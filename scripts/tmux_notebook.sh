@@ -128,11 +128,9 @@ resolve_session() {
 }
 
 run_notebook() {
-    project_venv=${OBJCTRL_RENKU_VENV:-$repo_dir/.venv-renku}
-    if [[ "$project_venv" != /* ]]; then
-        project_venv=$repo_dir/$project_venv
-    fi
-    nbconvert_command=$project_venv/bin/jupyter-nbconvert
+    source "$repo_dir/scripts/activate_renku_env.sh"
+
+    nbconvert_command=$OBJCTRL_RENKU_VENV/bin/jupyter-nbconvert
 
     if [[ ! -x "$nbconvert_command" ]]; then
         printf 'Error: jupyter-nbconvert not found: %s\n' \
@@ -147,14 +145,13 @@ run_notebook() {
         exit 1
     fi
 
-    kernel_name=${OBJCTRL_RENKU_KERNEL_NAME:-object-ctrl-renku}
     mkdir -p "$(dirname -- "$log_file")"
 
     printf -v notebook_command \
         '%q %q --to notebook --execute --inplace %q %s 2>&1 | tee %q' \
         "$nbconvert_command" \
         "$notebook" \
-        "--ExecutePreprocessor.kernel_name=$kernel_name" \
+        "--ExecutePreprocessor.kernel_name=$NOTEBOOK_KERNEL" \
         '--ExecutePreprocessor.timeout=-1 --CoalesceStreamsPreprocessor.enabled=True' \
         "$log_file"
     printf -v tmux_command 'bash -o pipefail -c %q' "$notebook_command"
