@@ -1,5 +1,5 @@
-# Runtime environment setup script for YOLO development
-# Usage: source env_setup.sh
+# Activate the local Conda environment for YOLO development.
+# Usage: source scripts/activate_local_env.sh
 #
 
 export CONDA_ENV="${CONDA_ENV:-objctrl}"
@@ -19,6 +19,9 @@ if command -v conda >/dev/null 2>&1; then
     conda activate "${CONDA_ENV}"
     unset __conda_shell
 else
-    echo "conda command not found. Install Conda before sourcing env_setup.sh." >&2
+    echo \
+        "conda command not found. Install Conda before sourcing " \
+        "scripts/activate_local_env.sh." \
+        >&2
     return 1 2>/dev/null || exit 1
 fi

@@ -50,7 +50,10 @@ from object_ctrl.platforms import yolox as yolox_platform
 from object_ctrl.utils.image import display as display_img
 
 configure_stdio_relative_path()
-yolox_platform.patch_mps_compatibility()
+
+DEVICE = torch.device(Device.auto_choose())
+if DEVICE.type == "mps":
+    yolox_platform.patch_mps_compatibility()
 
 # %% [markdown]
 # ## Experiment Setup
@@ -63,7 +66,6 @@ yolox_platform.patch_mps_compatibility()
 
 # %%
 settings = yolox_platform.training_settings_from_env(default_epochs=150)
-DEVICE = torch.device(Device.auto_choose())
 
 PRETRAINED_PATH = (
     ensure_dir(PROJECT_ROOT / "models" / "pretrained" / "yolox")
