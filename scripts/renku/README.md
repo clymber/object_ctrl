@@ -89,6 +89,187 @@ print(torch.cuda.is_available())
 The Python path should end in `.venv-renku/bin/python`, and CUDA availability
 should be `True`.
 
+## RF-DETR Small on the large basketball dataset
+
+Use `nb04.02-rfdetr_small_large_basketball` in a Linux Renku GPU session.
+Keep `.venv-renku` for Ultralytics and YOLOX; RF-DETR has its own environment
+and kernel. The local small-dataset experiment remains deferred.
+
+### Set up and select the RF-DETR runtime
+
+From the repository root:
+
+```bash
+bash scripts/setup_renku_rfdetr.sh
+
+export OBJCTRL_RENKU_VENV="$PWD/.venv-renku-rfdetr"
+export OBJCTRL_RENKU_KERNEL_NAME=object-ctrl-renku-rfdetr
+export NOTEBOOK_KERNEL=object-ctrl-renku-rfdetr
+source scripts/activate_renku_env.sh
+```
+
+Set all three overrides: an existing `NOTEBOOK_KERNEL` takes precedence over
+the activation script's default. In Renku's Jupyter interface, select kernel
+`object-ctrl-renku-rfdetr`, displayed as `Python (object_ctrl Renku RF-DETR)`.
+The interpreter should end in `.venv-renku-rfdetr/bin/python`.
+
+Setup installs the pinned RF-DETR training stack, headless OpenCV, the shared
+project package, and notebook tools. It checks CUDA tensor/NMS operations and
+a pretrained Small forward pass at 640 pixels, registers the kernel, and
+syncs only this notebook pair. It records GPU, package, kernel, and host/YOLO
+package inventories under `outputs/environment/rfdetr/`. Run setup again to
+check repeatability; notebook training, resume, and evaluation still require
+their own Renku smoke checks.
+
+The default PyTorch wheel index is CUDA 13.0. For a driver requiring another
+supported build of the pinned torch/torchvision pair, rerun setup with, for
+example, `OBJCTRL_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126`.
+The installed stack must pass the actual GPU checks. Setup-specific overrides
+are `OBJCTRL_RFDETR_PYTHON`, `OBJCTRL_RFDETR_VENV`, and
+`OBJCTRL_RFDETR_KERNEL_NAME`; when customizing the latter two, also update
+the activation overrides above.
+
+### Smoke, train, resume, and evaluate
+
+The notebook reuses the frozen
+`datasets/composed/coco_basketball_11501_1156_1395` splits. It prepares linked
+RF-DETR inputs under `data/processed/rfdetr/`; weights and caches stay under
+`models/`, and experiment artifacts go under `outputs/runs/basketball/`.
+
+First run two epochs on bounded subsets of 16 training, 8 validation, and
+8 test images:
+
+```bash
+unset RFDETR_RUN_DIR
+export RFDETR_MODE=fresh RFDETR_SMOKE=1 RFDETR_EPOCHS=2
+bash scripts/tmux_notebook.sh run \
+  --file notebooks/nb04.02-rfdetr_small_large_basketball.ipynb \
+  --session rfdetr-small-smoke
+bash scripts/tmux_notebook.sh check --session rfdetr-small-smoke
+```
+
+Logs are under `outputs/notebook_logs/`. Use a distinct tmux session name for
+each execution; completed panes remain available for inspection. Fresh runs
+automatically create a new experiment directory. Smoke artifacts are marked
+and excluded from the full comparison.
+
+The TQDM progress bar is live when running interactively in Jupyter. Detached
+`nbconvert` captures cell output in the executed notebook instead of streaming
+it into the tmux log. During a detached run, check the process and GPU activity:
+
+```bash
+bash scripts/tmux_notebook.sh check --session rfdetr-small-large
+watch -n 5 nvidia-smi
+tail -F outputs/runs/basketball/SELECTED_RFDETR_RUN/metrics.csv
+```
+
+Replace `SELECTED_RFDETR_RUN` with the allocated run directory. `metrics.csv`
+is updated after logged training and validation steps; the GPU display is the
+useful heartbeat while the first epoch is still running.
+
+After the smoke checks pass, start the full 100-epoch experiment:
+
+```bash
+unset RFDETR_RUN_DIR
+export RFDETR_MODE=fresh RFDETR_SMOKE=0 RFDETR_EPOCHS=100
+bash scripts/tmux_notebook.sh run \
+  --file notebooks/nb04.02-rfdetr_small_large_basketball.ipynb \
+  --session rfdetr-small-large
+```
+
+The input is fixed at 640 pixels, overriding Small's 512-pixel default.
+Training defaults to microbatch 4 with accumulation 1; increase
+`RFDETR_BATCH_SIZE` if GPU memory permits. RF-DETR 1.10.0 and the pinned
+Lightning release both normalize accumulated losses, so
+`RFDETR_GRAD_ACCUM_STEPS>1` changes gradient scaling. It is an explicit
+advanced override, not an equivalent replacement for a larger physical batch.
+The run records its actual batch and training settings.
+
+One hundred epochs is the maximum. Early stopping monitors EMA validation
+AP50:95 every epoch and stops after 10 consecutive epochs without an
+improvement of at least 0.001. Override the patience for a new run with
+`RFDETR_EARLY_STOPPING_PATIENCE`; set `RFDETR_EARLY_STOPPING=0` to require the
+full budget. The held-out test split never controls stopping.
+
+To continue an interrupted run, use the exact directory printed in its log:
+
+```bash
+unset RFDETR_SMOKE RFDETR_EPOCHS
+export RFDETR_MODE=resume
+export RFDETR_RUN_DIR="$PWD/outputs/runs/basketball/SELECTED_RFDETR_RUN"
+bash scripts/tmux_notebook.sh run \
+  --file notebooks/nb04.02-rfdetr_small_large_basketball.ipynb \
+  --session rfdetr-small-resume
+```
+
+Replace `SELECTED_RFDETR_RUN` with the selected run, including any numeric or
+smoke suffix. Resume requires `last.ckpt` from a completed epoch, including
+optimizer/scheduler state; it retains the original epoch budget and verifies
+the saved dataset identity and settings. Clear other experimental overrides
+if they differ from that run. Check resume on an interrupted smoke run before
+relying on it for a full experiment.
+
+For a completed run, reload the selected checkpoint and rerun the plots,
+evaluation, and comparison without fitting:
+
+```bash
+unset RFDETR_SMOKE RFDETR_EPOCHS
+export RFDETR_MODE=evaluate
+export RFDETR_RUN_DIR="$PWD/outputs/runs/basketball/SELECTED_RFDETR_RUN"
+bash scripts/tmux_notebook.sh run \
+  --file notebooks/nb04.02-rfdetr_small_large_basketball.ipynb \
+  --session rfdetr-small-evaluate
+```
+
+Keep `RFDETR_RUN_DIR` set to that completed run. Best weights are selected
+using validation AP50:95; fitting does not evaluate the held-out test split.
+
+### Export the existing YOLO baselines
+
+Use the existing `.venv-renku` interpreter and explicitly choose each saved
+large-dataset run. Review its `args.yaml`, `results.csv`, and best checkpoint
+before running these examples; adjust the run paths to the intended results:
+
+```bash
+.venv-renku/bin/python scripts/export_basketball_predictions.py \
+  --model ultralytics \
+  --run-dir outputs/runs/basketball/yolo11n_basketball_large_dataset \
+  --dataset-dir datasets/composed/coco_basketball_11501_1156_1395 \
+  --output-dir outputs/comparisons/basketball_large_dataset/baselines \
+  --device cuda:0 --resolution 640
+
+.venv-renku/bin/python scripts/export_basketball_predictions.py \
+  --model yolox \
+  --run-dir outputs/runs/basketball/yolox_tiny_basketball_large_dataset \
+  --dataset-dir datasets/composed/coco_basketball_11501_1156_1395 \
+  --output-dir outputs/comparisons/basketball_large_dataset/baselines \
+  --device cuda:0 --resolution 640
+
+export RFDETR_BASELINE_EXPORT_DIR=\
+"$PWD/outputs/comparisons/basketball_large_dataset/baselines"
+```
+
+The exporter loads `weights/best.pt` or `weights/best_ckpt.pth`, exports both
+validation and test predictions by default, and never retrains. Existing
+export files are not overwritten; choose another output directory for a new
+comparison. Set `RFDETR_BASELINE_EXPORT_DIR` before notebook execution, or
+rerun in evaluation mode after exporting. Missing baseline exports appear as
+unavailable rather than fabricated scores.
+
+The notebook recomputes all three models' metrics with one COCO evaluator:
+AP at score >= 0.001 and `maxDets=[1,10,100]`, plus precision/recall/F1 at
+score >= 0.25 and IoU >= 0.50. Negative-image false detections are reported
+separately. Native framework metrics remain distinct, and original YOLO
+training data identity is limited by the provenance saved in those old runs.
+
+For optional timings, add `--benchmark` to both exports and set
+`RFDETR_BENCHMARK=1` for the notebook. Remeasure all models on the same Renku
+GPU. These batch-one FP32 measurements include preprocessing and native
+postprocessing, exclude file loading, and use warm-up/CUDA synchronization;
+they are not model-only latency and must not be ranked against historical MPS
+timings. Comparison tables are saved under
+`outputs/comparisons/basketball_large_dataset/<RF-DETR run>/`.
+
 ## Notes
 
 - Keep edits in the Jupytext `.py` sources. Generated `.ipynb` files are

@@ -7,10 +7,20 @@ from .coco import (
     summarize_coco_dataset,
     summarize_coco_datasets,
 )
-from .datumaro import (
-    prefer_hardlinked_datumaro_media,
-    summarize_datumaro_label_counts,
-)
+
+
+def __getattr__(name: str):
+    """
+    Load optional Datumaro helpers only when preprocessing callers request them.
+    """
+    if name in {"prefer_hardlinked_datumaro_media", "summarize_datumaro_label_counts"}:
+        from . import datumaro
+
+        value = getattr(datumaro, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "filter_coco_annotation_by_labels",

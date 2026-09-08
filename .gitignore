@@ -17,6 +17,8 @@ models/pretrained/**/*.pt
 models/pretrained/**/*.pth
 models/pretrained/**/*.onnx
 models/pretrained/**/*.tflite
+models/pretrained/rfdetr/
+models/cache/
 
 # outputs
 outputs/*
@@ -125,6 +127,7 @@ celerybeat.pid
 .envrc
 .venv
 .venv-renku/
+.venv-renku-rfdetr/
 env/
 venv/
 ENV/

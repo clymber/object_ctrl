@@ -127,6 +127,33 @@ resolve_session() {
     log_file=$repo_dir/outputs/notebook_logs/$session_name.log
 }
 
+capture_notebook_environment() {
+    # A pre-existing tmux server does not inherit the invoking shell's settings.
+    # Clear old experiment controls inside this pane, then replay caller values.
+    notebook_environment='unset PYTHONHOME PYTHONPATH; '
+    notebook_environment+='for key in ${!RFDETR_@} ${!YOLOX_TINY_@} '
+    notebook_environment+='${!ULTRALYTICS_@}; do unset "$key"; done; '
+
+    local key assignment
+    local settings=(
+        PATH VIRTUAL_ENV PYTHONNOUSERSITE PYTHONUNBUFFERED
+        OBJCTRL_PROJECT_ROOT OBJCTRL_RENKU_VENV OBJCTRL_RENKU_KERNEL_NAME
+        NOTEBOOK_KERNEL CUDA_VISIBLE_DEVICES NVIDIA_VISIBLE_DEVICES
+        CUDA_DEVICE_ORDER PYTORCH_CUDA_ALLOC_CONF
+        RF_HOME HF_HOME TORCH_HOME XDG_CACHE_HOME MPLCONFIGDIR MPLBACKEND
+        HF_HUB_DISABLE_TELEMETRY HF_HUB_OFFLINE TRANSFORMERS_OFFLINE
+        JUPYTER_RUNTIME_DIR IPYTHONDIR
+    )
+    for key in "${settings[@]}" ${!RFDETR_@} ${!YOLOX_TINY_@} ${!ULTRALYTICS_@}; do
+        if [[ ${!key+x} ]]; then
+            printf -v assignment 'export %s=%q; ' "$key" "${!key}"
+        else
+            printf -v assignment 'unset %s; ' "$key"
+        fi
+        notebook_environment+="$assignment"
+    done
+}
+
 run_notebook() {
     source "$repo_dir/scripts/activate_renku_env.sh"
 
@@ -146,9 +173,11 @@ run_notebook() {
     fi
 
     mkdir -p "$(dirname -- "$log_file")"
+    capture_notebook_environment
 
     printf -v notebook_command \
-        '%q %q --to notebook --execute --inplace %q %s 2>&1 | tee %q' \
+        '%s%q %q --to notebook --execute --inplace %q %s 2>&1 | tee %q' \
+        "$notebook_environment" \
         "$nbconvert_command" \
         "$notebook" \
         "--ExecutePreprocessor.kernel_name=$NOTEBOOK_KERNEL" \

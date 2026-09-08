@@ -2,11 +2,19 @@
 
 ## Development and Runtime Environment
 
+### Renku Linux/CUDA experiments
+
+The large-dataset experiments target a Renku session with an NVIDIA GPU.
+Ultralytics and YOLOX share `.venv-renku`; RF-DETR Small uses the separate
+`.venv-renku-rfdetr` environment. See the
+[Renku operator guide](scripts/renku/README.md) for setup, kernel selection,
+detached execution, resume, and baseline exports.
+
 ### Conda (Anaconda, Miniconda or Miniforge)
 
-This project is currently intended for a local Conda-based workflow, especially
-for Apple Silicon MPS environment checks and local Jupytext notebook
-development. The Conda environment is defined in `environment.yml`.
+The optional local development workflow uses Conda for Apple Silicon MPS
+checks and Jupytext notebook editing. The Conda environment is defined in
+`environment.yml`.
 
 Command to create the Conda environment:
 
