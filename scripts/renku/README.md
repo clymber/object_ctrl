@@ -113,13 +113,14 @@ the activation script's default. In Renku's Jupyter interface, select kernel
 `object-ctrl-renku-rfdetr`, displayed as `Python (object_ctrl Renku RF-DETR)`.
 The interpreter should end in `.venv-renku-rfdetr/bin/python`.
 
-Setup installs the pinned RF-DETR training stack, headless OpenCV, the shared
-project package, and notebook tools. It checks CUDA tensor/NMS operations and
-a pretrained Small forward pass at 640 pixels, registers the kernel, and
-syncs only this notebook pair. It records GPU, package, kernel, and host/YOLO
-package inventories under `outputs/environment/rfdetr/`. Run setup again to
-check repeatability; notebook training, resume, and evaluation still require
-their own Renku smoke checks.
+Setup installs the pinned RF-DETR training and ONNX export stack, headless
+OpenCV, the shared project package, and notebook tools. It checks CUDA
+tensor/NMS operations and a pretrained Small forward pass at 640 pixels,
+registers the kernel, and syncs only this notebook pair. It records GPU,
+package, kernel, and host/YOLO package inventories under
+`outputs/environment/rfdetr/`. Run setup again to check repeatability;
+notebook training, resume, and evaluation still require their own Renku smoke
+checks.
 
 The default PyTorch wheel index is CUDA 13.0. For a driver requiring another
 supported build of the pinned torch/torchvision pair, rerun setup with, for
@@ -179,7 +180,7 @@ bash scripts/tmux_notebook.sh run \
 
 The input is fixed at 640 pixels, overriding Small's 512-pixel default.
 Training defaults to microbatch 4 with accumulation 1; increase
-`RFDETR_BATCH_SIZE` if GPU memory permits. RF-DETR 1.10.0 and the pinned
+`RFDETR_BATCH_SIZE` if GPU memory permits. RF-DETR 1.10.1 and the pinned
 Lightning release both normalize accumulated losses, so
 `RFDETR_GRAD_ACCUM_STEPS>1` changes gradient scaling. It is an explicit
 advanced override, not an equivalent replacement for a larger physical batch.

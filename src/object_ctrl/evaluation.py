@@ -258,6 +258,8 @@ def _validate_metadata(metadata: dict[str, Any]) -> None:
     floor = metadata["postprocessing"].get("score_floor")
     if not isinstance(floor, (int, float)) or not 0 <= floor <= 1:
         raise ValueError("Prediction postprocessing must record a valid score_floor")
+    if "benchmark" in metadata:
+        _validate_benchmark(metadata["benchmark"])
 
 
 def _valid_sha256(value: Any) -> bool:
@@ -269,6 +271,115 @@ def _valid_sha256(value: Any) -> bool:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _validate_benchmark(benchmark: Any) -> None:
+    """
+    Validate the batch-one end-to-end timing record stored in an artifact.
+    """
+    required = {
+        "protocol",
+        "batch_size",
+        "precision",
+        "warmup",
+        "samples",
+        "end_to_end_ms_mean",
+        "end_to_end_ms_median",
+        "device",
+        "host",
+        "torch",
+        "cuda_runtime",
+        "image_sha256",
+        "gpu",
+        "includes",
+        "excludes",
+    }
+    if not isinstance(benchmark, dict):
+        raise ValueError("Prediction benchmark must be an object")
+    if missing := required - benchmark.keys():
+        raise ValueError(f"Missing prediction benchmark fields: {sorted(missing)}")
+    if benchmark["protocol"] != "pil-to-cpu-coco-predictions-v1":
+        raise ValueError("Prediction benchmark uses an unsupported protocol")
+    if (
+        type(benchmark["batch_size"]) is not int
+        or benchmark["batch_size"] != 1
+        or benchmark["precision"] != "float32"
+    ):
+        raise ValueError("Prediction benchmark must use batch-one FP32 inference")
+    for name in ("warmup", "samples"):
+        if type(benchmark[name]) is not int or benchmark[name] < 1:
+            raise ValueError(f"Prediction benchmark requires a positive {name}")
+    for name in ("end_to_end_ms_mean", "end_to_end_ms_median"):
+        value = benchmark[name]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(f"Prediction benchmark requires a positive finite {name}")
+    for name in ("device", "host", "torch", "includes", "excludes"):
+        if not isinstance(benchmark[name], str) or not benchmark[name]:
+            raise ValueError(f"Prediction benchmark requires a nonempty {name}")
+    device = benchmark["device"]
+    if device != "cpu" and not device.startswith("cuda"):
+        raise ValueError("Prediction benchmark device must be CPU or CUDA")
+    if device.startswith("cuda") and (
+        not isinstance(benchmark["gpu"], str) or not benchmark["gpu"]
+    ):
+        raise ValueError("CUDA prediction benchmark requires a GPU name")
+    if benchmark["cuda_runtime"] is not None and not isinstance(
+        benchmark["cuda_runtime"], str
+    ):
+        raise ValueError("Prediction benchmark CUDA runtime must be a string or null")
+    hashes = benchmark["image_sha256"]
+    if (
+        not isinstance(hashes, list)
+        or len(hashes) != benchmark["samples"]
+        or not all(_valid_sha256(digest) for digest in hashes)
+    ):
+        raise ValueError("Prediction benchmark requires one image SHA256 per sample")
+
+
+def _benchmark_signature(benchmark: dict[str, Any]) -> dict[str, Any]:
+    """
+    Select benchmark properties that must match for a fair model comparison.
+    """
+    _validate_benchmark(benchmark)
+    return {
+        "protocol": benchmark["protocol"],
+        "batch_size": benchmark["batch_size"],
+        "precision": benchmark["precision"],
+        "warmup": benchmark["warmup"],
+        "samples": benchmark["samples"],
+        "device_type": benchmark["device"].partition(":")[0],
+        "host": benchmark["host"],
+        "gpu": benchmark["gpu"],
+        "image_sha256": benchmark["image_sha256"],
+        "includes": benchmark["includes"],
+        "excludes": benchmark["excludes"],
+    }
+
+
+def _benchmark_columns(benchmark: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Return report columns for an optional validated latency benchmark.
+    """
+    if benchmark is None:
+        return {
+            "benchmark_samples": None,
+            "latency_ms_median": None,
+            "latency_ms_mean": None,
+            "batch_one_images_per_second": None,
+        }
+    _validate_benchmark(benchmark)
+    median = float(benchmark["end_to_end_ms_median"])
+    return {
+        "benchmark_samples": benchmark["samples"],
+        "latency_ms_median": median,
+        "latency_ms_mean": float(benchmark["end_to_end_ms_mean"]),
+        "batch_one_images_per_second": 1000.0 / median,
+    }
 
 
 def write_prediction_artifact(
@@ -367,9 +478,17 @@ def write_comparison(
     """
     rows = []
     reports = {}
+    benchmark_reference: tuple[str, dict[str, Any]] | None = None
     for model, path in artifacts.items():
         if path is None or not Path(path).is_file():
-            rows.append({"model": model, "split": split, "status": "unavailable"})
+            rows.append(
+                {
+                    "model": model,
+                    "split": split,
+                    "status": "unavailable",
+                    **_benchmark_columns(None),
+                }
+            )
             continue
         artifact = read_prediction_artifact(path, annotation_path)
         metadata = artifact["metadata"]
@@ -379,7 +498,27 @@ def write_comparison(
         if postprocess.get("score_floor") != 0.001:
             raise ValueError(f"Export {path} must use score_floor=0.001")
         metrics = evaluate_predictions(annotation_path, artifact["predictions"])
-        reports[model] = {"metadata": metadata, "metrics": metrics}
+        benchmark = metadata.get("benchmark")
+        timing = _benchmark_columns(benchmark)
+        if benchmark is not None:
+            signature = _benchmark_signature(benchmark)
+            if benchmark_reference is None:
+                benchmark_reference = (model, signature)
+            elif signature != benchmark_reference[1]:
+                differences = [
+                    name
+                    for name, value in signature.items()
+                    if value != benchmark_reference[1][name]
+                ]
+                raise ValueError(
+                    f"Incomparable benchmarks for {benchmark_reference[0]} and "
+                    f"{model}: {', '.join(differences)} differ"
+                )
+        reports[model] = {
+            "metadata": metadata,
+            "metrics": metrics,
+            "timing": timing,
+        }
         rows.append(
             {
                 "model": model,
@@ -403,6 +542,7 @@ def write_comparison(
                         "negative_image_false_positive_fraction",
                     )
                 },
+                **timing,
             }
         )
     destination = Path(output_dir)
@@ -423,16 +563,30 @@ def write_comparison(
     lines = [
         f"# Basketball comparison: {split}",
         "",
-        "| Model | Status | AP50 | AP50:95 | Precision | Recall |",
-        "| --- | --- | --- | --- | --- | --- |",
+        (
+            "| Model | Status | AP50 | AP50:95 | Precision | Recall | "
+            "Median latency (ms/image) | Mean latency (ms/image) | "
+            "Batch-1 images/s |"
+        ),
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in rows:
-        values = [
+        metric_values = [
             f"{row[key]:.4f}" if row.get(key) is not None else "—"
             for key in ("ap50", "ap50_95", "precision", "recall")
         ]
+        timing_values = [
+            f"{row[key]:.2f}" if row.get(key) is not None else "—"
+            for key in (
+                "latency_ms_median",
+                "latency_ms_mean",
+                "batch_one_images_per_second",
+            )
+        ]
         lines.append(
-            f"| {row['model']} | {row['status']} | " + " | ".join(values) + " |"
+            f"| {row['model']} | {row['status']} | "
+            + " | ".join(metric_values + timing_values)
+            + " |"
         )
     lines.extend(
         [
@@ -440,7 +594,21 @@ def write_comparison(
             "AP uses a score floor of 0.001 and at most 100 detections per image.",
             "Precision and recall use confidence 0.25 and IoU 0.50.",
             "Training budgets and preprocessing may differ between models.",
-            "Native training metrics and historical timings are separate measurements.",
+            (
+                "Latency is batch-one FP32 end-to-end prediction time; lower is "
+                "better. It includes preprocessing, transfer, forward inference, "
+                "native postprocessing, and CPU boxes, but excludes file I/O and "
+                "model loading."
+            ),
+            (
+                "Batch-1 images/s is 1000 divided by median latency and is not "
+                "batched throughput. A dash means that artifact was not benchmarked."
+            ),
+            (
+                "Displayed timings share the protocol, warm-up, image sequence, "
+                "precision, batch size, host, and accelerator; incompatible "
+                "benchmarks are rejected. Historical timings remain separate."
+            ),
         ]
     )
     (destination / f"comparison_{split}.md").write_text(

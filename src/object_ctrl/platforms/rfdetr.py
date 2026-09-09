@@ -15,6 +15,7 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
@@ -30,9 +31,10 @@ from ..evaluation import (
 )
 from ..utils.json_io import read_json, write_json
 
-RFDETR_VERSION = "1.10.0"
+RFDETR_VERSION = "1.10.1"
 RUN_CONFIG = "run_config.json"
 BEST_CHECKPOINT = "checkpoint_best_total.pth"
+BEST_ONNX_MODEL = "checkpoint_best_total.onnx"
 RESUME_CHECKPOINT = "last.ckpt"
 LEGACY_EARLY_STOPPING = {
     "early_stopping": False,
@@ -40,6 +42,27 @@ LEGACY_EARLY_STOPPING = {
     "early_stopping_min_delta": 0.001,
     "early_stopping_use_ema": False,
 }
+
+
+class RunMode(StrEnum):
+    """
+    Identify whether an RF-DETR run is created, resumed, or evaluated.
+    """
+
+    FRESH = "fresh"
+    RESUME = "resume"
+    EVALUATE = "evaluate"
+
+    @classmethod
+    def parse(cls, value: Any) -> RunMode:
+        """
+        Normalize a string or enum member and report the supported values.
+        """
+        try:
+            return cls(value)
+        except (TypeError, ValueError) as error:
+            options = ", ".join(option.value for option in cls)
+            raise ValueError(f"RFDETR_MODE must be {options}") from error
 
 
 @dataclass(frozen=True)
@@ -63,7 +86,7 @@ class TrainingSettings:
     early_stopping_min_delta: float = 0.001
     early_stopping_use_ema: bool = True
     smoke_run: bool = False
-    mode: str = "fresh"
+    mode: RunMode = RunMode.FRESH
     run_dir: str | None = None
 
     def __post_init__(self) -> None:
@@ -102,11 +125,10 @@ class TrainingSettings:
         ):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
-        if self.mode not in {"fresh", "resume", "evaluate"}:
-            raise ValueError("RFDETR_MODE must be fresh, resume, or evaluate")
-        if self.mode != "fresh" and not self.run_dir:
+        object.__setattr__(self, "mode", RunMode.parse(self.mode))
+        if self.mode is not RunMode.FRESH and not self.run_dir:
             raise ValueError("RFDETR_RUN_DIR is required for resume/evaluate")
-        if self.mode == "fresh" and self.run_dir:
+        if self.mode is RunMode.FRESH and self.run_dir:
             raise ValueError("Use resume/evaluate to open an existing RFDETR_RUN_DIR")
 
     @property
@@ -124,7 +146,9 @@ def settings_from_env(
     Read explicit overrides, inheriting saved training settings for resume/evaluation.
     """
     overrides = overrides or {}
-    mode = overrides.get("mode", os.environ.get("RFDETR_MODE", "fresh"))
+    mode = RunMode.parse(
+        overrides.get("mode", os.environ.get("RFDETR_MODE", RunMode.FRESH))
+    )
     run_dir = overrides.get("run_dir", os.environ.get("RFDETR_RUN_DIR")) or None
     values: dict[str, Any] = {}
     if run_dir:
@@ -135,7 +159,7 @@ def settings_from_env(
             else path.resolve()
         )
         run_dir = str(path)
-        if mode in {"resume", "evaluate"}:
+        if mode in {RunMode.RESUME, RunMode.EVALUATE}:
             values = read_json(path / RUN_CONFIG)["settings"]
             for name, value in LEGACY_EARLY_STOPPING.items():
                 values.setdefault(name, value)
@@ -160,7 +184,7 @@ def settings_from_env(
             else:
                 values[field] = float(value) if field in float_fields else int(value)
     values.update(overrides)
-    if mode == "fresh" and values.get("smoke_run"):
+    if mode is RunMode.FRESH and values.get("smoke_run"):
         values.setdefault("epochs", 2)
     return TrainingSettings(**{**values, "mode": mode, "run_dir": run_dir})
 
@@ -210,6 +234,8 @@ def runtime_report() -> dict:
                 "numpy",
                 "pandas",
                 "pycocotools",
+                "onnx",
+                "onnxruntime",
             )
         },
     }
@@ -217,13 +243,13 @@ def runtime_report() -> dict:
 
 def train_kwargs(settings: TrainingSettings, dataset_dir: Path, run_dir: Path) -> dict:
     """
-    Build the RF-DETR 1.10.0 training configuration with validation-only selection.
+    Build the RF-DETR 1.10.1 training configuration with validation-only selection.
     """
     return {
         "dataset_dir": str(dataset_dir.resolve()),
         "dataset_file": "roboflow",
         "output_dir": str(run_dir.resolve()),
-        # RF-DETR 1.10.0 maps an indexed device to ``devices=[0]``, but its
+        # RF-DETR 1.10.1 maps an indexed device to ``devices=[0]`, but its
         # trainer helper only accepts an integer or string. ``cuda`` still
         # selects the first visible GPU and keeps the supported scalar form.
         "device": "cuda",
@@ -286,7 +312,7 @@ def prepare_run(
         "model": "rfdetr_small",
         "source_dataset": manifest["source_dir"],
     }
-    if settings.mode != "fresh":
+    if settings.mode is not RunMode.FRESH:
         run_dir = Path(settings.run_dir).resolve()
         stored = read_json(run_dir / RUN_CONFIG)
         stored_settings = stored.get("settings")
@@ -300,12 +326,14 @@ def prepare_run(
                 raise ValueError(
                     f"Existing run has different {key}; restore its settings"
                 )
-        checkpoint = RESUME_CHECKPOINT if settings.mode == "resume" else BEST_CHECKPOINT
+        checkpoint = (
+            RESUME_CHECKPOINT if settings.mode is RunMode.RESUME else BEST_CHECKPOINT
+        )
         if not (run_dir / checkpoint).is_file():
             raise FileNotFoundError(
                 f"Missing {settings.mode} checkpoint: {run_dir / checkpoint}"
             )
-        if settings.mode == "resume":
+        if settings.mode is RunMode.RESUME:
             validate_resume_checkpoint(run_dir / checkpoint, settings.epochs)
         return run_dir
     base = project_root / "outputs" / "runs" / "basketball"
@@ -421,7 +449,7 @@ def fit_model(
     from pytorch_lightning import seed_everything
 
     kwargs = train_kwargs(settings, Path(manifest["dataset_dir"]), run_dir)
-    if settings.mode == "resume":
+    if settings.mode is RunMode.RESUME:
         kwargs["resume"] = str(run_dir / RESUME_CHECKPOINT)
     config_kwargs = {
         key: value
@@ -530,7 +558,7 @@ def load_best_model(run_dir: Path) -> tuple[Any, dict]:
     checkpoint = run_dir / BEST_CHECKPOINT
     if not checkpoint.is_file():
         raise FileNotFoundError(checkpoint)
-    # The selected total file is stripped in 1.10.0: epoch and model_config
+    # The selected total file is stripped in 1.10.1: epoch and model_config
     # are lost. Recover provenance from its unstripped EMA/regular source and
     # explicitly restore our resolution instead of silently using Small's 512.
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
@@ -591,6 +619,28 @@ def load_best_model(run_dir: Path) -> tuple[Any, dict]:
     return model, metadata
 
 
+def export_onnx_model(model: Any, run_dir: Path, resolution: int) -> Path:
+    """
+    Export the verified best RF-DETR model as a static batch-one ONNX graph.
+    """
+    expected = run_dir / BEST_ONNX_MODEL
+    exported = Path(
+        model.export(
+            format="onnx",
+            output_dir=str(run_dir),
+            output_name=Path(BEST_ONNX_MODEL).stem,
+            shape=(resolution, resolution),
+            batch_size=1,
+            dynamic_batch=False,
+        )
+    )
+    if exported.resolve() != expected.resolve():
+        raise RuntimeError(f"RF-DETR exported ONNX to an unexpected path: {exported}")
+    if not expected.is_file():
+        raise FileNotFoundError(f"RF-DETR did not produce the ONNX model: {expected}")
+    return expected
+
+
 def predictions_for_image(
     model: Any, image: Image.Image, image_id: int, category_id: int
 ) -> list[dict]:
@@ -602,7 +652,7 @@ def predictions_for_image(
     for box, score, label in zip(
         detections.xyxy, detections.confidence, detections.class_id, strict=True
     ):
-        # 1.10.0 predict() can include its explicit no-object slot at low scores.
+        # 1.10.1 predict() can include its explicit no-object slot at low scores.
         if int(label) == 1:
             continue
         if int(label) != 0:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pandas as pd
@@ -41,6 +43,55 @@ class TinyModel(torch.nn.Module):
         Scale a tensor by the model's single parameter.
         """
         return value * self.weight
+
+
+class TinyExportHead(TinyHead):
+    """
+    Minimal YOLOX head carrying the deploy-time decoding flag.
+    """
+
+    def __init__(self) -> None:
+        """
+        Initialize the head with inference decoding enabled.
+        """
+        super().__init__()
+        self.decode_in_inference = True
+
+
+class TinyExportModel(TinyModel):
+    """
+    Minimal model containing the SiLU module replaced during ONNX export.
+    """
+
+    def __init__(self) -> None:
+        """
+        Initialize the tiny model with an export-sensitive activation.
+        """
+        super().__init__()
+        self.head = TinyExportHead()
+        self.activation = torch.nn.SiLU()
+
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        """
+        Scale and activate an input tensor.
+        """
+        return self.activation(super().forward(value))
+
+
+class FakeExportExp:
+    """
+    Small experiment object exposing the model and ONNX test input size.
+    """
+
+    test_size = (24, 32)
+
+    def get_model(self) -> TinyExportModel:
+        """
+        Return the experiment's cached tiny export model.
+        """
+        if not hasattr(self, "model"):
+            self.model = TinyExportModel()
+        return self.model
 
 
 class FakeScheduler:
@@ -131,6 +182,112 @@ def make_settings(resume_run_dir: Path | None = None) -> yolox.TrainingSettings:
         verbose_output=False,
         resume_run_dir=resume_run_dir,
     )
+
+
+def test_onnx_export_uses_fresh_cpu_ema_model_and_validates_graph(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Export EMA weights with YOLOX deploy settings and validate the saved graph.
+    """
+    checkpoint_path = tmp_path / "weights" / "best_ckpt.pth"
+    checkpoint_path.parent.mkdir()
+    raw_model = TinyExportModel()
+    ema_model = TinyExportModel()
+    with torch.no_grad():
+        raw_model.weight.fill_(2.0)
+        ema_model.weight.fill_(3.0)
+    torch.save(
+        {
+            "model": raw_model.state_dict(),
+            "ema_model": ema_model.state_dict(),
+        },
+        checkpoint_path,
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_export(
+        model: torch.nn.Module,
+        dummy_input: torch.Tensor,
+        path: Path,
+        **kwargs: Any,
+    ) -> None:
+        """
+        Capture the public ONNX export call and create its expected artifact.
+        """
+        captured["model"] = model
+        captured["dummy_input"] = dummy_input
+        captured["export_path"] = path
+        captured["export_kwargs"] = kwargs
+        Path(path).write_bytes(b"mock ONNX graph")
+
+    checked_model = object()
+
+    def fake_load(path: Path) -> object:
+        """
+        Capture the ONNX artifact loaded for validation.
+        """
+        captured["loaded_path"] = path
+        return checked_model
+
+    def fake_check_model(model: object) -> None:
+        """
+        Capture the model passed to the ONNX checker.
+        """
+        captured["checked_model"] = model
+
+    fake_onnx: Any = ModuleType("onnx")
+    fake_checker: Any = ModuleType("onnx.checker")
+    fake_onnx.load = fake_load
+    fake_checker.check_model = fake_check_model
+    fake_onnx.checker = fake_checker
+    monkeypatch.setitem(sys.modules, "onnx", fake_onnx)
+    monkeypatch.setattr(torch.onnx, "export", fake_export)
+
+    exp = FakeExportExp()
+    stale_model = exp.get_model()
+    output_path = tmp_path / "exports" / "best_ckpt.onnx"
+
+    exported_path = yolox.export_trained_model_to_onnx(
+        exp,
+        checkpoint_path,
+        output_path,
+    )
+
+    export_model = captured["model"]
+    assert exported_path == output_path
+    assert captured["export_path"] == output_path
+    assert captured["loaded_path"] == output_path
+    assert captured["checked_model"] is checked_model
+    assert export_model is not stale_model
+    assert export_model.weight.item() == pytest.approx(3.0)
+    assert next(export_model.parameters()).device.type == "cpu"
+    assert not export_model.training
+    assert not export_model.head.decode_in_inference
+    assert type(export_model.activation) is yolox.YOLOXSiLU
+    assert captured["dummy_input"].shape == (1, 3, 24, 32)
+    assert captured["dummy_input"].device.type == "cpu"
+    assert captured["export_kwargs"] == {
+        "input_names": ["images"],
+        "output_names": ["output"],
+        "opset_version": 11,
+        "dynamo": False,
+    }
+    assert not hasattr(exp, "model")
+
+
+def test_onnx_export_rejects_a_non_onnx_output_path(tmp_path: Path) -> None:
+    """
+    Reject an incorrectly named artifact before loading a checkpoint.
+    """
+    with pytest.raises(ValueError, match=r"must end with \.onnx"):
+        yolox.export_trained_model_to_onnx(
+            FakeExportExp(),
+            tmp_path / "missing_checkpoint.pth",
+            tmp_path / "best_ckpt.pt",
+        )
 
 
 def test_training_settings_read_explicit_resume_directory(

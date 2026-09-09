@@ -173,13 +173,32 @@ display_img(fig, close=True)
 # quality, add more varied examples, and tune inference confidence/NMS thresholds.
 
 
-# %% [markdown]
-# ## Validation and Test Metrics
-
 # %%
 BEST_MODEL_PATH = run_dir / "weights" / "best.pt"
 eval_model = YOLO(BEST_MODEL_PATH)
 
+# %% [markdown]
+# ## Export Best Checkpoint to ONNX
+
+# %%
+onnx_model_path = Path(
+    eval_model.export(
+        format="onnx",
+        imgsz=640,
+        batch=1,
+        device="cpu",
+        dynamic=False,
+        simplify=False,
+    )
+)
+if not onnx_model_path.is_file():
+    raise FileNotFoundError(f"ONNX export not found: {onnx_model_path}")
+print(f"Exported ONNX model: {onnx_model_path}")
+
+# %% [markdown]
+# ## Validation and Test Metrics
+
+# %%
 validation_metrics = eval_model.val(
     data=DATA_YAML,
     imgsz=640,

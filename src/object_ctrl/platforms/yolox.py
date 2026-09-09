@@ -52,10 +52,11 @@ from yolox.data import (
 )
 from yolox.exp import Exp as YOLOXExp
 from yolox.models.losses import IOUloss
+from yolox.models.network_blocks import SiLU as YOLOXSiLU
 import yolox.models.yolo_head as yolox_yolo_head
 from yolox.models.yolo_head import YOLOXHead
 import yolox.utils.boxes as yolox_boxes
-from yolox.utils import (LRScheduler, ModelEMA, postprocess,)
+from yolox.utils import LRScheduler, ModelEMA, postprocess, replace_module
 
 from .. import PROJECT_ROOT, cache_download, ensure_dir
 from ..utils.json_io import read_json
@@ -1669,6 +1670,52 @@ def load_trained_model(
     model.to(device)
     model.eval()
     return model
+
+
+def export_trained_model_to_onnx(
+    exp: BasketballTinyExp,
+    checkpoint_path: Path,
+    output_path: Path,
+) -> Path:
+    """
+    Export a selected YOLOX checkpoint's EMA model to a validated ONNX file.
+    """
+    output_path = Path(output_path)
+    if output_path.suffix.lower() != ".onnx":
+        raise ValueError(f"ONNX output path must end with .onnx: {output_path}")
+
+    import onnx
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        export_model = load_trained_model(
+            exp,
+            checkpoint_path,
+            torch.device("cpu"),
+        )
+        export_model = replace_module(
+            export_model,
+            torch.nn.SiLU,
+            YOLOXSiLU,
+        )
+        export_model.head.decode_in_inference = False
+        dummy_input = torch.randn(1, 3, *exp.test_size)
+
+        torch.onnx.export(
+            export_model,
+            dummy_input,
+            output_path,
+            input_names=["images"],
+            output_names=["output"],
+            opset_version=11,
+            dynamo=False,
+        )
+        onnx_model = onnx.load(output_path)
+        onnx.checker.check_model(onnx_model)
+    finally:
+        discard_cached_exp_attribute(exp, "model")
+
+    return output_path
 
 
 def read_training_history(results_csv: Path) -> pd.DataFrame:

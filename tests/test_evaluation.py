@@ -76,6 +76,33 @@ def metadata(tmp_path: Path) -> dict:
     }
 
 
+def benchmark(*, median: float = 10.0, **overrides: object) -> dict:
+    """
+    Describe a comparable batch-one FP32 benchmark over two fixture images.
+    """
+    record = {
+        "protocol": "pil-to-cpu-coco-predictions-v1",
+        "batch_size": 1,
+        "precision": "float32",
+        "warmup": 5,
+        "samples": 2,
+        "end_to_end_ms_mean": median + 1.0,
+        "end_to_end_ms_median": median,
+        "device": "cuda:0",
+        "host": "renku-test-host",
+        "torch": "2.9.1",
+        "cuda_runtime": "12.8",
+        "image_sha256": ["a" * 64, "b" * 64],
+        "gpu": "NVIDIA Test GPU",
+        "includes": (
+            "resize/normalize, transfer, forward, native postprocess, CPU boxes"
+        ),
+        "excludes": "file I/O, drawing, model loading",
+    }
+    record.update(overrides)
+    return record
+
+
 def test_perfect_detections_include_negative_image(annotations: Path) -> None:
     """
     Perfect detections score one while a no-prediction negative stays in the split.
@@ -350,7 +377,106 @@ def test_comparison_marks_missing_baselines_unavailable(
     assert report["models"]["rfdetr_small"]["metrics"]["image_count"] == 3
     assert (destination / "comparison_test.csv").is_file()
     assert "0.001" in (destination / "comparison_test.md").read_text()
-    assert not any("speed" in name or "latency" in name for name in frame.columns)
+    assert frame["latency_ms_median"].isna().all()
+    assert frame["batch_one_images_per_second"].isna().all()
+
+
+def test_comparison_reports_compatible_latency_and_inverse_median_throughput(
+    annotations: Path,
+    metadata: dict,
+    tmp_path: Path,
+) -> None:
+    """
+    Compare compatible end-to-end latency records and derive batch-one images/s.
+    """
+    paths = {}
+    for model, median in (("yolo11n", 20.0), ("rfdetr_small", 10.0)):
+        timing = benchmark(
+            median=median,
+            device="cuda" if model == "rfdetr_small" else "cuda:0",
+        )
+        paths[model] = write_prediction_artifact(
+            tmp_path / f"{model}.json",
+            annotations,
+            [prediction(10), prediction(20)],
+            metadata={
+                **metadata,
+                "model": model,
+                "benchmark": timing,
+            },
+        )
+    destination = tmp_path / "comparison"
+    frame = write_comparison(paths, annotations, destination, split="test")
+    by_model = frame.set_index("model")
+    assert by_model.loc["yolo11n", "latency_ms_median"] == 20.0
+    assert by_model.loc["rfdetr_small", "latency_ms_mean"] == 11.0
+    assert by_model.loc["yolo11n", "batch_one_images_per_second"] == 50.0
+    assert by_model.loc["rfdetr_small", "batch_one_images_per_second"] == 100.0
+    report = read_json(destination / "comparison_test.json")
+    assert report["models"]["rfdetr_small"]["timing"] == {
+        "benchmark_samples": 2,
+        "latency_ms_median": 10.0,
+        "latency_ms_mean": 11.0,
+        "batch_one_images_per_second": 100.0,
+    }
+    markdown = (destination / "comparison_test.md").read_text()
+    assert "Median latency (ms/image)" in markdown
+    assert "| rfdetr_small | available |" in markdown
+    assert "| 10.00 | 11.00 | 100.00 |" in markdown
+
+
+@pytest.mark.parametrize(
+    ("override", "difference"),
+    [
+        ({"host": "another-host"}, "host"),
+        ({"gpu": "Another GPU"}, "gpu"),
+        ({"image_sha256": ["a" * 64, "c" * 64]}, "image_sha256"),
+        ({"precision": "float16"}, "batch-one FP32"),
+    ],
+)
+def test_comparison_rejects_incompatible_benchmarks(
+    annotations: Path,
+    metadata: dict,
+    tmp_path: Path,
+    override: dict,
+    difference: str,
+) -> None:
+    """
+    Refuse latency comparisons produced with incompatible timing conditions.
+    """
+    reference = write_prediction_artifact(
+        tmp_path / "reference.json",
+        annotations,
+        [],
+        metadata={**metadata, "model": "yolo11n", "benchmark": benchmark()},
+    )
+    candidate_metadata = {
+        **metadata,
+        "model": "rfdetr_small",
+        "benchmark": benchmark(**override),
+    }
+    if difference == "batch-one FP32":
+        with pytest.raises(ValueError, match=difference):
+            write_prediction_artifact(
+                tmp_path / "candidate.json",
+                annotations,
+                [],
+                metadata=candidate_metadata,
+            )
+        return
+    candidate = write_prediction_artifact(
+        tmp_path / "candidate.json",
+        annotations,
+        [],
+        metadata=candidate_metadata,
+    )
+    with pytest.raises(ValueError, match=difference):
+        write_comparison(
+            {"yolo11n": reference, "rfdetr_small": candidate},
+            annotations,
+            tmp_path / "comparison",
+            split="test",
+        )
 
 
 @pytest.mark.parametrize(

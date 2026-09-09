@@ -203,10 +203,11 @@ fig, axes = yolox_platform.plot_detection_metrics(history)
 display_img(fig, close=True)
 
 # %% [markdown]
-# ## Validation and Test Metrics
+# ## Export the Best Checkpoint to ONNX
 #
-# Reload the best checkpoint and evaluate it on both validation and held-out
-# test splits.
+# Export the selected EMA weights through a fresh CPU model. The ONNX graph uses
+# a fixed batch-one input at the experiment test size and leaves YOLOX decoding
+# and non-maximum suppression to the deployment runtime.
 
 # %%
 best_model_path = run_dir / "weights" / "best_ckpt.pth"
@@ -218,6 +219,22 @@ eval_exp = yolox_platform.BasketballTinyExp(
     project_name=project_name,
     seed=settings.seed,
 )
+
+# %%
+onnx_model_path = yolox_platform.export_trained_model_to_onnx(
+    eval_exp,
+    best_model_path,
+    run_dir / "weights" / "best_ckpt.onnx",
+)
+print(f"Exported ONNX model: {onnx_model_path}")
+
+# %% [markdown]
+# ## Validation and Test Metrics
+#
+# Reload the best checkpoint and evaluate it on both validation and held-out
+# test splits.
+
+# %%
 best_model = yolox_platform.load_trained_model(eval_exp, best_model_path, DEVICE)
 
 validation_metrics = yolox_platform.evaluate_model(

@@ -113,6 +113,72 @@ def fake_predictor(args, run_settings: dict, category_id: int):
     }
 
 
+def test_ultralytics_version_prefers_standard_distribution(
+    exporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Use the standard distribution metadata when it is installed.
+    """
+    requested = []
+
+    def fake_version(distribution: str) -> str:
+        """
+        Record the first successful distribution lookup.
+        """
+        requested.append(distribution)
+        return "8.3.0"
+
+    monkeypatch.setattr(exporter, "version", fake_version)
+    assert exporter.ultralytics_version() == "8.3.0"
+    assert requested == ["ultralytics"]
+
+
+def test_ultralytics_version_falls_back_to_headless_distribution(
+    exporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Resolve the Renku headless fork when standard metadata is unavailable.
+    """
+    requested = []
+
+    def fake_version(distribution: str) -> str:
+        """
+        Fail the standard lookup and resolve the headless distribution.
+        """
+        requested.append(distribution)
+        if distribution == "ultralytics":
+            raise exporter.PackageNotFoundError(distribution)
+        return "8.3.0-headless"
+
+    monkeypatch.setattr(exporter, "version", fake_version)
+    assert exporter.ultralytics_version() == "8.3.0-headless"
+    assert requested == ["ultralytics", "ultralytics-opencv-headless"]
+
+
+def test_ultralytics_version_reports_both_missing_distributions(
+    exporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Name both supported distributions when neither has package metadata.
+    """
+
+    def missing_version(distribution: str) -> str:
+        """
+        Simulate an environment without either supported distribution.
+        """
+        raise exporter.PackageNotFoundError(distribution)
+
+    monkeypatch.setattr(exporter, "version", missing_version)
+    with pytest.raises(
+        exporter.PackageNotFoundError,
+        match="ultralytics or ultralytics-opencv-headless",
+    ):
+        exporter.ultralytics_version()
+
+
 def test_export_covers_both_splits_and_preserves_native_metadata(
     exporter,
     args: argparse.Namespace,

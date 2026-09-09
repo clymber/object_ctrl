@@ -20,12 +20,13 @@
 # [nb02.02 (YOLO11n)](nb02.02-ultra_yolo11n_large_basketball.py) and
 # [nb03.02 (YOLOX-Tiny)](nb03.02-yolox_tiny_large_basketball.py).
 # This notebook follows the same workflow: train, inspect curves, reload the
-# best validation checkpoint, evaluate the held-out test set, and review images.
+# best validation checkpoint, export ONNX, evaluate the held-out test set, and
+# review images.
 #
 # **Before running on Renku:**
 #
 # 1. Allocate an NVIDIA GPU and run `bash scripts/setup_renku_rfdetr.sh` from
-#    the repository root. Setup installs the pinned RF-DETR 1.10.0 runtime in
+#    the repository root. Setup installs the pinned RF-DETR 1.10.1 runtime in
 #    `.venv-renku-rfdetr` and checks a 640-pixel CUDA forward pass.
 # 2. Select **Python (object_ctrl Renku RF-DETR)** as this notebook's kernel.
 # 3. Ensure `datasets/composed/coco_basketball_11501_1156_1395/` is present.
@@ -94,7 +95,7 @@ aligned_print(runtime)
 # on an out-of-memory error, reduce it or enable `gradient_checkpointing` in
 # a new run. Workers=0 avoids container shared-memory limits.
 #
-# Accumulation defaults to 1 because RF-DETR 1.10.0 and Lightning 2.6.1 both
+# Accumulation defaults to 1 because RF-DETR 1.10.1 and Lightning 2.6.1 both
 # normalize accumulated losses. Values above 1 therefore change gradient
 # scaling; they are not equivalent to increasing the physical batch. The
 # saved configuration records the actual settings for comparison with YOLO.
@@ -110,7 +111,7 @@ RUN_OVERRIDES = {
     # "batch_size": 4,
     # "gradient_checkpointing": True,
     # "early_stopping_patience": 10,
-    # "mode": "evaluate",
+    # "mode": rfdetr_platform.RunMode.EVALUATE,
     # "run_dir": "outputs/runs/basketball/rfdetr_small_basketball_large_dataset",
 }
 settings = rfdetr_platform.settings_from_env(PROJECT_ROOT, overrides=RUN_OVERRIDES)
@@ -192,7 +193,7 @@ run_dir = rfdetr_platform.prepare_run(PROJECT_ROOT, settings, manifest, runtime)
 print(f"Run directory: {run_dir}")
 
 # %%
-if settings.mode != "evaluate":
+if settings.mode is not rfdetr_platform.RunMode.EVALUATE:
     training_model = rfdetr_platform.build_model(settings)
     loader_report = rfdetr_platform.verify_loader(training_model, settings, manifest)
     write_json(run_dir / "loader_check.json", loader_report)
@@ -215,11 +216,15 @@ else:
 # | --- | --- |
 # | `last.ckpt` | Full state for recovery after the last completed epoch |
 # | `checkpoint_best_total.pth` | Selected inference weights (regular or EMA) |
+# | `checkpoint_best_total.onnx` | Static batch-one ONNX export of selected weights |
 # | `checkpoint_best_regular.pth`, `checkpoint_best_ema.pth` | Epoch metadata |
 # | `run_config.json`, `resolved_config.json` | Requested and resolved settings |
 # | `dataset_manifest.json`, `loader_check.json` | Dataset and loader checks |
 #
-# RF-DETR 1.10.0 strips epoch/resolution metadata from the total checkpoint.
+# The ONNX graph exposes RF-DETR's raw boxes and logits. Consumers must apply
+# the detector's decoding and postprocessing to obtain final detections.
+#
+# RF-DETR 1.10.1 strips epoch/resolution metadata from the total checkpoint.
 # The helper verifies its weights against the selected source checkpoint,
 # recovers the best epoch, and explicitly restores the trained resolution.
 
@@ -232,6 +237,12 @@ display_img(metric_figure, close=True)
 
 best_model, best_metadata = rfdetr_platform.load_best_model(run_dir)
 aligned_print(best_metadata)
+onnx_path = run_dir / rfdetr_platform.BEST_ONNX_MODEL
+if settings.mode is not rfdetr_platform.RunMode.EVALUATE or not onnx_path.is_file():
+    onnx_path = rfdetr_platform.export_onnx_model(
+        best_model, run_dir, resolution=settings.resolution
+    )
+print(f"ONNX model: {onnx_path}")
 
 # %% [markdown]
 # ## Validation and held-out test evaluation
@@ -301,9 +312,10 @@ for split in ("val", "test"):
 # epochs, seeds, augmentations, and architecture differ. Optional timing
 # records (`RFDETR_BENCHMARK=1`) use batch-one FP32 inference on the same image
 # sequence, including preprocessing, prediction transfer, and postprocessing
-# but excluding disk reads. They are recorded in prediction artifacts, and
-# this notebook does not generate a speed ranking. Historical
-# MPS timings must not be ranked against Renku CUDA timings.
+# but excluding disk reads. When artifacts include compatible benchmarks, the
+# comparison reports median/mean latency and inverse-median batch-one images/s.
+# Incompatible protocols, image sequences, hosts, or accelerators are rejected.
+# Historical MPS timings must not be ranked against Renku CUDA timings.
 #
 # Comparison CSV, JSON, and Markdown files are written under
 # `outputs/comparisons/basketball_large_dataset/<run name>/`. To add YOLO

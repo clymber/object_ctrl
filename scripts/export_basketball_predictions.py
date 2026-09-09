@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +23,21 @@ from object_ctrl.evaluation import (
     write_prediction_artifact,
 )
 from object_ctrl.utils.json_io import read_json, write_json
+
+
+def ultralytics_version() -> str:
+    """
+    Return the installed standard or headless Ultralytics distribution version.
+    """
+    distributions = ("ultralytics", "ultralytics-opencv-headless")
+    missing = None
+    for distribution in distributions:
+        try:
+            return version(distribution)
+        except PackageNotFoundError as error:
+            missing = error
+    expected = " or ".join(distributions)
+    raise PackageNotFoundError(expected) from missing
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,6 +79,7 @@ def build_predictor(
         configure_privacy()
         from ultralytics import YOLO
 
+        framework_version = ultralytics_version()
         checkpoint = args.run_dir / "weights" / "best.pt"
         if not checkpoint.is_file():
             raise FileNotFoundError(checkpoint)
@@ -86,7 +102,7 @@ def build_predictor(
                 iou=nms_iou,
                 max_det=max_det,
                 agnostic_nms=agnostic_nms,
-                half=False,
+                quantize="fp32",
                 verbose=False,
                 rect=True,
             )[0]
@@ -111,7 +127,7 @@ def build_predictor(
 
         metadata = {
             "model": "yolo11n",
-            "framework_version": version("ultralytics"),
+            "framework_version": framework_version,
             "parameters": sum(p.numel() for p in model.model.parameters()),
             "checkpoint": str(checkpoint),
             "postprocessing": {

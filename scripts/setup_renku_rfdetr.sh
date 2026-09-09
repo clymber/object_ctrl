@@ -198,6 +198,8 @@ import jupytext
 import matplotlib
 import nbconvert
 import object_ctrl
+import onnx
+import onnxruntime
 import torch
 import torchvision
 from PIL import Image
@@ -244,6 +246,8 @@ report = {
     "cuda_runtime": torch.version.cuda,
     "gpu": torch.cuda.get_device_name(0),
     "rfdetr": importlib.metadata.version("rfdetr"),
+    "onnx": onnx.__version__,
+    "onnxruntime": onnxruntime.__version__,
     "pycocotools": importlib.metadata.version("pycocotools"),
     "resolution": 640,
     "forward_pass": "passed",

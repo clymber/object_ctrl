@@ -43,6 +43,7 @@ def test_settings_support_smoke_and_saved_evaluation_overrides(
     assert smoke.early_stopping_patience == 10
     assert smoke.early_stopping_min_delta == 0.001
     assert smoke.early_stopping_use_ema is True
+    assert smoke.mode is rfdetr.RunMode.FRESH
 
     run_dir = tmp_path / "saved"
     run_dir.mkdir()
@@ -54,7 +55,7 @@ def test_settings_support_smoke_and_saved_evaluation_overrides(
     )
     assert evaluation.epochs == 17
     assert evaluation.batch_size == 2
-    assert evaluation.mode == "evaluate"
+    assert evaluation.mode is rfdetr.RunMode.EVALUATE
     assert evaluation.run_dir == str(run_dir.resolve())
 
 
@@ -111,6 +112,7 @@ def test_legacy_run_retains_disabled_early_stopping(tmp_path: Path) -> None:
         {"amp": 1},
         {"early_stopping_patience": 0},
         {"early_stopping_min_delta": -0.001},
+        {"mode": "invalid"},
     ],
 )
 def test_settings_reject_ambiguous_or_invalid_values(override: dict) -> None:
@@ -123,7 +125,7 @@ def test_settings_reject_ambiguous_or_invalid_values(override: dict) -> None:
 
 def test_training_uses_supported_single_gpu_device_form(tmp_path: Path) -> None:
     """
-    Avoid RF-DETR 1.10.0's indexed-device list failure in its trainer helper.
+    Avoid RF-DETR 1.10.1's indexed-device list failure in its trainer helper.
     """
     kwargs = rfdetr.train_kwargs(rfdetr.TrainingSettings(), tmp_path, tmp_path)
     assert kwargs["device"] == "cuda"
@@ -256,6 +258,70 @@ def test_best_checkpoint_rejects_a_mismatched_selected_source(
     )
     with pytest.raises(ValueError, match="differ"):
         rfdetr.load_best_model(tmp_path)
+
+
+def test_export_onnx_model_uses_static_best_checkpoint_name(tmp_path: Path) -> None:
+    """
+    Export the verified model at its trained resolution with a stable artifact name.
+    """
+    calls = []
+
+    def fake_export(**kwargs):
+        """
+        Record native export arguments and create its declared artifact.
+        """
+        calls.append(kwargs)
+        output = Path(kwargs["output_dir"]) / f"{kwargs['output_name']}.onnx"
+        output.touch()
+        return output
+
+    model = SimpleNamespace(export=fake_export)
+    exported = rfdetr.export_onnx_model(model, tmp_path, resolution=640)
+    assert exported == tmp_path / rfdetr.BEST_ONNX_MODEL
+    assert calls == [
+        {
+            "format": "onnx",
+            "output_dir": str(tmp_path),
+            "output_name": "checkpoint_best_total",
+            "shape": (640, 640),
+            "batch_size": 1,
+            "dynamic_batch": False,
+        }
+    ]
+
+
+def test_export_onnx_model_rejects_an_unexpected_native_path(tmp_path: Path) -> None:
+    """
+    Fail when the native exporter does not return the requested artifact path.
+    """
+
+    def fake_export(**kwargs):
+        """
+        Return a different ONNX filename to exercise path validation.
+        """
+        output = Path(kwargs["output_dir"]) / "unexpected.onnx"
+        output.touch()
+        return output
+
+    model = SimpleNamespace(export=fake_export)
+    with pytest.raises(RuntimeError, match="unexpected path"):
+        rfdetr.export_onnx_model(model, tmp_path, resolution=640)
+
+
+def test_export_onnx_model_requires_the_declared_file(tmp_path: Path) -> None:
+    """
+    Fail when the native exporter reports success without writing its model.
+    """
+
+    def fake_export(**kwargs):
+        """
+        Return the declared path without creating the ONNX artifact.
+        """
+        return Path(kwargs["output_dir"]) / f"{kwargs['output_name']}.onnx"
+
+    model = SimpleNamespace(export=fake_export)
+    with pytest.raises(FileNotFoundError, match="did not produce"):
+        rfdetr.export_onnx_model(model, tmp_path, resolution=640)
 
 
 def test_predictions_skip_background_and_convert_xyxy_to_coco() -> None:
