@@ -11,7 +11,9 @@ import json
 import math
 import os
 import platform
+import subprocess
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
@@ -632,12 +634,80 @@ def export_onnx_model(model: Any, run_dir: Path, resolution: int) -> Path:
             shape=(resolution, resolution),
             batch_size=1,
             dynamic_batch=False,
+            verbose=False,
         )
     )
     if exported.resolve() != expected.resolve():
         raise RuntimeError(f"RF-DETR exported ONNX to an unexpected path: {exported}")
     if not expected.is_file():
         raise FileNotFoundError(f"RF-DETR did not produce the ONNX model: {expected}")
+    return expected
+
+
+def validate_onnx_model(path: Path) -> Path:
+    """
+    Load an ONNX artifact and require it to pass the standard graph checker.
+    """
+    if not path.is_file():
+        raise FileNotFoundError(path)
+
+    import onnx
+
+    onnx_model = onnx.load(path)
+    onnx.checker.check_model(onnx_model)
+    return path
+
+
+def ensure_onnx_model(run_dir: Path) -> Path:
+    """
+    Reuse a valid export or stage, validate, and atomically install a new one.
+    """
+    run_dir = run_dir.resolve()
+    if not run_dir.is_dir():
+        raise FileNotFoundError(run_dir)
+    expected = run_dir / BEST_ONNX_MODEL
+    if expected.is_file():
+        try:
+            return validate_onnx_model(expected)
+        except Exception as error:
+            print(f"Replacing invalid ONNX model {expected}: {error}", flush=True)
+
+    model, _ = load_best_model(run_dir)
+    resolution = model.model_config.resolution
+    with tempfile.TemporaryDirectory(
+        prefix=".rfdetr-onnx-", dir=run_dir
+    ) as temporary_dir:
+        staged = export_onnx_model(model, Path(temporary_dir), resolution)
+        validate_onnx_model(staged)
+        os.replace(staged, expected)
+    return expected
+
+
+def ensure_onnx_model_in_subprocess(project_root: Path, run_dir: Path) -> Path:
+    """
+    Run RF-DETR ONNX export outside IPython and return its validated artifact.
+    """
+    project_root = project_root.resolve()
+    run_dir = run_dir.resolve()
+    worker = project_root / "scripts" / "export_rfdetr_onnx.py"
+    if not worker.is_file():
+        raise FileNotFoundError(worker)
+    subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(worker),
+            "--run-dir",
+            str(run_dir),
+        ],
+        cwd=project_root,
+        check=True,
+    )
+    expected = run_dir / BEST_ONNX_MODEL
+    if not expected.is_file():
+        raise FileNotFoundError(
+            f"RF-DETR export worker did not produce the ONNX model: {expected}"
+        )
     return expected
 
 

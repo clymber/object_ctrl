@@ -225,6 +225,17 @@ bash scripts/tmux_notebook.sh run \
 Keep `RFDETR_RUN_DIR` set to that completed run. Best weights are selected
 using validation AP50:95; fitting does not evaluate the held-out test split.
 
+The notebook launches ONNX export through a fresh Python worker instead of
+inside IPython. The worker disables RF-DETR's verbose graph dump, validates a
+temporary ONNX graph, and atomically replaces the stable artifact only after
+validation succeeds. Existing exports are validated before reuse. To run the
+same worker directly from the repository root:
+
+```bash
+.venv-renku-rfdetr/bin/python scripts/export_rfdetr_onnx.py \
+  --run-dir outputs/runs/basketball/SELECTED_RFDETR_RUN
+```
+
 ### Export the existing YOLO baselines
 
 Use the existing `.venv-renku` interpreter and explicitly choose each saved

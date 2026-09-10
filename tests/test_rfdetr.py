@@ -286,6 +286,7 @@ def test_export_onnx_model_uses_static_best_checkpoint_name(tmp_path: Path) -> N
             "shape": (640, 640),
             "batch_size": 1,
             "dynamic_batch": False,
+            "verbose": False,
         }
     ]
 
@@ -322,6 +323,150 @@ def test_export_onnx_model_requires_the_declared_file(tmp_path: Path) -> None:
     model = SimpleNamespace(export=fake_export)
     with pytest.raises(FileNotFoundError, match="did not produce"):
         rfdetr.export_onnx_model(model, tmp_path, resolution=640)
+
+
+def test_ensure_onnx_model_reuses_a_valid_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Avoid checkpoint loading and export when the existing graph validates.
+    """
+    expected = tmp_path / rfdetr.BEST_ONNX_MODEL
+    expected.write_bytes(b"valid")
+    validated = []
+
+    def fake_validate(path: Path) -> Path:
+        """
+        Record validation of the existing artifact.
+        """
+        validated.append(path)
+        return path
+
+    monkeypatch.setattr(rfdetr, "validate_onnx_model", fake_validate)
+    monkeypatch.setattr(
+        rfdetr,
+        "load_best_model",
+        lambda *_: pytest.fail("valid ONNX should not reload the checkpoint"),
+    )
+
+    assert rfdetr.ensure_onnx_model(tmp_path) == expected
+    assert validated == [expected]
+
+
+def test_ensure_onnx_model_atomically_replaces_an_invalid_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Keep the old path in place until a staged replacement passes validation.
+    """
+    expected = tmp_path / rfdetr.BEST_ONNX_MODEL
+    expected.write_bytes(b"invalid")
+    model = SimpleNamespace(model_config=SimpleNamespace(resolution=640))
+    validated = []
+
+    def fake_validate(path: Path) -> Path:
+        """
+        Reject the old artifact and accept the newly staged one.
+        """
+        validated.append(path)
+        if path == expected:
+            raise ValueError("invalid graph")
+        assert path.parent != tmp_path
+        assert path.read_bytes() == b"replacement"
+        return path
+
+    def fake_export(model_arg, output_dir: Path, resolution: int) -> Path:
+        """
+        Write a replacement into the worker's temporary directory.
+        """
+        assert model_arg is model
+        assert resolution == 640
+        staged = output_dir / rfdetr.BEST_ONNX_MODEL
+        staged.write_bytes(b"replacement")
+        assert expected.read_bytes() == b"invalid"
+        return staged
+
+    monkeypatch.setattr(rfdetr, "validate_onnx_model", fake_validate)
+    monkeypatch.setattr(rfdetr, "load_best_model", lambda *_: (model, {}))
+    monkeypatch.setattr(rfdetr, "export_onnx_model", fake_export)
+
+    assert rfdetr.ensure_onnx_model(tmp_path) == expected
+    assert expected.read_bytes() == b"replacement"
+    assert validated[0] == expected
+    assert validated[1].name == rfdetr.BEST_ONNX_MODEL
+
+
+def test_ensure_onnx_model_preserves_existing_file_after_staging_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Leave an existing artifact untouched when its replacement fails validation.
+    """
+    expected = tmp_path / rfdetr.BEST_ONNX_MODEL
+    expected.write_bytes(b"old")
+    model = SimpleNamespace(model_config=SimpleNamespace(resolution=640))
+
+    def fake_validate(path: Path) -> Path:
+        """
+        Reject both the existing and staged fixture artifacts.
+        """
+        raise ValueError(f"invalid graph: {path}")
+
+    def fake_export(*_args) -> Path:
+        """
+        Write a staged artifact that will fail validation.
+        """
+        output_dir = _args[1]
+        staged = output_dir / rfdetr.BEST_ONNX_MODEL
+        staged.write_bytes(b"bad replacement")
+        return staged
+
+    monkeypatch.setattr(rfdetr, "validate_onnx_model", fake_validate)
+    monkeypatch.setattr(rfdetr, "load_best_model", lambda *_: (model, {}))
+    monkeypatch.setattr(rfdetr, "export_onnx_model", fake_export)
+
+    with pytest.raises(ValueError, match="invalid graph"):
+        rfdetr.ensure_onnx_model(tmp_path)
+    assert expected.read_bytes() == b"old"
+
+
+def test_ensure_onnx_model_in_subprocess_uses_active_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Launch the standalone worker with the notebook kernel's Python executable.
+    """
+    project_root = tmp_path / "project"
+    run_dir = project_root / "outputs" / "run"
+    worker = project_root / "scripts" / "export_rfdetr_onnx.py"
+    worker.parent.mkdir(parents=True)
+    worker.touch()
+    run_dir.mkdir(parents=True)
+    calls = []
+
+    def fake_run(command, **kwargs) -> None:
+        """
+        Record the worker command and emulate its successful artifact creation.
+        """
+        calls.append((command, kwargs))
+        (run_dir / rfdetr.BEST_ONNX_MODEL).touch()
+
+    monkeypatch.setattr(rfdetr.subprocess, "run", fake_run)
+
+    expected = rfdetr.ensure_onnx_model_in_subprocess(project_root, run_dir)
+    assert expected == run_dir / rfdetr.BEST_ONNX_MODEL
+    assert calls == [
+        (
+            [
+                sys.executable,
+                "-I",
+                str(worker),
+                "--run-dir",
+                str(run_dir),
+            ],
+            {"cwd": project_root, "check": True},
+        )
+    ]
 
 
 def test_predictions_skip_background_and_convert_xyxy_to_coco() -> None:

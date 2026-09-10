@@ -227,6 +227,9 @@ else:
 # RF-DETR 1.10.1 strips epoch/resolution metadata from the total checkpoint.
 # The helper verifies its weights against the selected source checkpoint,
 # recovers the best epoch, and explicitly restores the trained resolution.
+# ONNX export runs in a fresh Python process because RF-DETR's in-process
+# exporter can hang under IPython. The worker suppresses the verbose graph,
+# validates a staged artifact, and atomically promotes it into the run.
 
 # %%
 loss_figure, metric_figure = rfdetr_platform.plot_history(history)
@@ -235,14 +238,13 @@ metric_figure.savefig(run_dir / "validation_metrics.png", bbox_inches="tight")
 display_img(loss_figure, close=True)
 display_img(metric_figure, close=True)
 
+onnx_path = rfdetr_platform.ensure_onnx_model_in_subprocess(
+    PROJECT_ROOT, run_dir
+)
+print(f"ONNX model: {onnx_path}")
+
 best_model, best_metadata = rfdetr_platform.load_best_model(run_dir)
 aligned_print(best_metadata)
-onnx_path = run_dir / rfdetr_platform.BEST_ONNX_MODEL
-if settings.mode is not rfdetr_platform.RunMode.EVALUATE or not onnx_path.is_file():
-    onnx_path = rfdetr_platform.export_onnx_model(
-        best_model, run_dir, resolution=settings.resolution
-    )
-print(f"ONNX model: {onnx_path}")
 
 # %% [markdown]
 # ## Validation and held-out test evaluation
