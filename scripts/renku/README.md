@@ -274,12 +274,12 @@ score >= 0.25 and IoU >= 0.50. Negative-image false detections are reported
 separately. Native framework metrics remain distinct, and original YOLO
 training data identity is limited by the provenance saved in those old runs.
 
-For optional timings, add `--benchmark` to both exports and set
-`RFDETR_BENCHMARK=1` for the notebook. Remeasure all models on the same Renku
-GPU. These batch-one FP32 measurements include preprocessing and native
-postprocessing, exclude file loading, and use warm-up/CUDA synchronization;
-they are not model-only latency and must not be ranked against historical MPS
-timings. Comparison tables are saved under
+For timings, add `--benchmark` to both exports. RF-DETR benchmarking is enabled
+by default in the notebook; set `RFDETR_BENCHMARK=0` only to skip it. Remeasure
+all models on the same Renku GPU. These batch-one FP32 measurements include
+preprocessing and native postprocessing, exclude file loading, and use
+warm-up/CUDA synchronization; they are not model-only latency and must not be
+ranked against historical MPS timings. Comparison tables are saved under
 `outputs/comparisons/basketball_large_dataset/<RF-DETR run>/`.
 
 ## Notes

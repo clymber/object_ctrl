@@ -34,6 +34,8 @@
 # 4. Choose a mode in **Experiment settings**, then run the notebook in order.
 #    For long training runs, use the detached tmux commands in the
 #    [Renku guide](../scripts/renku/README.md#rf-detr-small-nb0402).
+# 5. Latency benchmarking is enabled by default. Set `RFDETR_BENCHMARK=0` only
+#    when you deliberately want to skip it.
 #
 # The experiment uses 640 x 640 input, overriding Small's 512-pixel default,
 # and up to 100 epochs. The final comparison recomputes metrics from saved
@@ -126,12 +128,15 @@ DERIVED_DATASET = PROJECT_ROOT / "data" / "processed" / "rfdetr" / dataset_name
 # Set to an export directory produced by scripts/export_basketball_predictions.py.
 # If omitted, YOLO rows are explicitly unavailable while RF-DETR still runs.
 BASELINE_EXPORT_DIR = os.environ.get("RFDETR_BASELINE_EXPORT_DIR") or None
-BENCHMARK = os.environ.get("RFDETR_BENCHMARK", "0") == "1"
+benchmark_setting = os.environ.get("RFDETR_BENCHMARK", "1")
+if benchmark_setting not in {"0", "1"}:
+    raise ValueError("RFDETR_BENCHMARK must be 0 or 1")
+BENCHMARK = benchmark_setting == "1"
 
 aligned_print({
     **vars(settings), "samples_per_optimizer_step": settings.samples_per_optimizer_step,
     "source_dataset": SOURCE_DATASET, "derived_dataset": DERIVED_DATASET,
-    "baseline_exports": BASELINE_EXPORT_DIR,
+    "baseline_exports": BASELINE_EXPORT_DIR, "benchmark": BENCHMARK,
 })
 
 # %% [markdown]
@@ -311,11 +316,12 @@ for split in ("val", "test"):
 #
 # The comparison recomputes all three sets of metrics with one evaluator.
 # Treat these as preliminary fine-tuning experiments: batch size, actual
-# epochs, seeds, augmentations, and architecture differ. Optional timing
-# records (`RFDETR_BENCHMARK=1`) use batch-one FP32 inference on the same image
-# sequence, including preprocessing, prediction transfer, and postprocessing
-# but excluding disk reads. When artifacts include compatible benchmarks, the
-# comparison reports median/mean latency and inverse-median batch-one images/s.
+# epochs, seeds, augmentations, and architecture differ. Timing is enabled by
+# default; set `RFDETR_BENCHMARK=0` to skip it. Records use batch-one FP32
+# inference on the same image sequence, including preprocessing, prediction
+# transfer, and postprocessing but excluding disk reads. When artifacts include
+# compatible benchmarks, the comparison reports median/mean latency and
+# inverse-median batch-one images/s.
 # Incompatible protocols, image sequences, hosts, or accelerators are rejected.
 # Historical MPS timings must not be ranked against Renku CUDA timings.
 #
