@@ -9,8 +9,7 @@ import argparse
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -23,6 +22,38 @@ from object_ctrl.evaluation import (
     write_prediction_artifact,
 )
 from object_ctrl.utils.json_io import read_json, write_json
+
+
+class ModelSpec(NamedTuple):
+    """
+    Describe one notebook model's run layout and portable artifact name.
+    """
+
+    artifact_name: str
+    run_pattern: str
+    checkpoint: Path
+    yolox_experiment: str | None = None
+
+# Model specifications for different YOLO variants.
+MODEL_SPECS = {
+    "ultralytics": ModelSpec(
+        artifact_name="yolo11n",
+        run_pattern="yolo11n_basketball_large_dataset*",
+        checkpoint=Path("weights/best.pt"),
+    ),
+    "yolox": ModelSpec(
+        artifact_name="yolox_tiny",
+        run_pattern="yolox_tiny_basketball_large_dataset*",
+        checkpoint=Path("weights/best_ckpt.pth"),
+        yolox_experiment="BasketballTinyExp",
+    ),
+    "yolox-nano": ModelSpec(
+        artifact_name="yolox_nano",
+        run_pattern="yolox_nano_basketball_large_dataset*",
+        checkpoint=Path("weights/best_ckpt.pth"),
+        yolox_experiment="BasketballNanoExp",
+    ),
+}
 
 
 def ultralytics_version() -> str:
@@ -42,11 +73,21 @@ def ultralytics_version() -> str:
 
 def parse_args() -> argparse.Namespace:
     """
-    Require explicit baseline selection and keep detector-specific imports lazy.
+    Parse one baseline export while keeping detector-specific imports lazy.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=("ultralytics", "yolox"), required=True)
-    parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--model", choices=tuple(MODEL_SPECS), required=True)
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        help="Exact run directory; overrides automatic newest-run discovery",
+    )
+    parser.add_argument(
+        "--runs-dir",
+        type=Path,
+        default=Path("outputs/runs/basketball"),
+        help="Directory searched when --run-dir is omitted",
+    )
     parser.add_argument(
         "--dataset-dir",
         type=Path,
@@ -59,6 +100,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resolution", type=int, default=640)
     parser.add_argument("--benchmark", action="store_true")
     return parser.parse_args()
+
+
+def latest_run_dir(runs_dir: Path, model: str) -> Path:
+    """
+    Return the newest exportable training directory for the selected model.
+    """
+    spec = MODEL_SPECS[model]
+    runs_dir = runs_dir.expanduser().resolve()
+
+    required = (Path("args.yaml"), Path("results.csv"), spec.checkpoint)
+    candidates = [
+        path for path in runs_dir.glob(spec.run_pattern)
+        if path.is_dir() and all((path / item).is_file() for item in required)
+    ]
+    if not candidates:
+        raise FileNotFoundError(
+            f"No exportable run matching {spec.run_pattern!r} in {runs_dir}; "
+        )
+
+    return max(
+        candidates, key=lambda path: (path.stat().st_mtime_ns, path.name),
+    ).resolve()
+
+
+def resolve_run_dir(args: argparse.Namespace) -> Path:
+    """
+    Preserve an explicit run path or discover the newest compatible run.
+    """
+    if args.run_dir is not None:
+        return args.run_dir.expanduser().resolve()
+
+    return latest_run_dir(args.runs_dir, args.model)
 
 
 def build_predictor(
@@ -78,9 +151,10 @@ def build_predictor(
 
         configure_privacy()
         from ultralytics import YOLO
+        from ultralytics.engine.results import Results
 
         framework_version = ultralytics_version()
-        checkpoint = args.run_dir / "weights" / "best.pt"
+        checkpoint = args.run_dir / MODEL_SPECS[args.model].checkpoint
         if not checkpoint.is_file():
             raise FileNotFoundError(checkpoint)
         model = YOLO(checkpoint)
@@ -94,23 +168,47 @@ def build_predictor(
             """
             Predict at a low score floor while preserving native Ultralytics NMS.
             """
-            result = model.predict(
-                image,
-                imgsz=args.resolution,
-                device=args.device,
-                conf=0.001,
-                iou=nms_iou,
-                max_det=max_det,
-                agnostic_nms=agnostic_nms,
-                quantize="fp32",
-                verbose=False,
-                rect=True,
-            )[0]
+            prediction = next(
+                iter(
+                    model.predict(
+                        image,
+                        imgsz=args.resolution,
+                        device=args.device,
+                        conf=0.001,
+                        iou=nms_iou,
+                        max_det=max_det,
+                        agnostic_nms=agnostic_nms,
+                        quantize="fp32",
+                        verbose=False,
+                        rect=True,
+                        stream=False,
+                    )
+                ),
+                None,
+            )
+            if prediction is None:
+                raise RuntimeError("Ultralytics returned no prediction result")
+            if not isinstance(prediction, Results):
+                raise TypeError(
+                    f"Ultralytics returned unexpected {type(prediction).__name__}"
+                )
+            boxes = prediction.boxes
+            if boxes is None:
+                raise RuntimeError("Ultralytics detection result has no boxes")
+            xyxy = boxes.xyxy
+            confidence = boxes.conf
+            classes = boxes.cls
+            if not isinstance(xyxy, torch.Tensor):
+                raise TypeError("Ultralytics box coordinates must be a tensor")
+            if not isinstance(confidence, torch.Tensor):
+                raise TypeError("Ultralytics confidence scores must be a tensor")
+            if not isinstance(classes, torch.Tensor):
+                raise TypeError("Ultralytics class labels must be a tensor")
             rows = []
             for box, score, label in zip(
-                result.boxes.xyxy.cpu().tolist(),
-                result.boxes.conf.cpu().tolist(),
-                result.boxes.cls.cpu().tolist(),
+                xyxy.cpu().tolist(),
+                confidence.cpu().tolist(),
+                classes.cpu().tolist(),
                 strict=True,
             ):
                 if int(label) != 0:
@@ -125,10 +223,13 @@ def build_predictor(
                 )
             return rows
 
+        ultralytics_model = model.model
+        if not isinstance(ultralytics_model, torch.nn.Module):
+            raise RuntimeError("Ultralytics did not load a local PyTorch model")
         metadata = {
             "model": "yolo11n",
             "framework_version": framework_version,
-            "parameters": sum(p.numel() for p in model.model.parameters()),
+            "parameters": sum(p.numel() for p in ultralytics_model.parameters()),
             "checkpoint": str(checkpoint),
             "postprocessing": {
                 "score_floor": 0.001,
@@ -143,12 +244,16 @@ def build_predictor(
     else:
         from object_ctrl.platforms import yolox
 
-        checkpoint = args.run_dir / "weights" / "best_ckpt.pth"
+        spec = MODEL_SPECS[args.model]
+        checkpoint = args.run_dir / spec.checkpoint
         if not checkpoint.is_file():
             raise FileNotFoundError(checkpoint)
         if run_settings.get("classes") != ["basketball"]:
             raise ValueError("YOLOX run must use one basketball class")
-        exp = yolox.BasketballTinyExp(
+        if spec.yolox_experiment is None:
+            raise ValueError(f"Missing YOLOX experiment for {args.model}")
+        experiment_class = getattr(yolox, spec.yolox_experiment)
+        exp = experiment_class(
             dataset_dir=args.dataset_dir,
             output_dir=args.run_dir.parent,
             max_epoch=int(run_settings["epochs"]),
@@ -159,7 +264,6 @@ def build_predictor(
         exp.nmsthre = float(run_settings.get("nms_threshold", exp.nmsthre))
         device = torch.device(args.device)
         model = yolox.load_trained_model(exp, checkpoint, device)
-        categories = SimpleNamespace(class_ids=[category_id])
 
         def predict_one(image: Image.Image) -> list[dict]:
             """
@@ -167,11 +271,11 @@ def build_predictor(
             """
             bgr = np.asarray(image)[:, :, ::-1].copy()
             return yolox.predict_image(
-                model, exp, bgr, device, categories, conf_threshold=0.001
+                model, exp, bgr, device, [category_id], conf_threshold=0.001
             )
 
         metadata = {
-            "model": "yolox_tiny",
+            "model": spec.artifact_name,
             "framework_version": version("yolox"),
             "parameters": sum(p.numel() for p in model.parameters()),
             "checkpoint": str(checkpoint),
@@ -190,23 +294,27 @@ def export(args: argparse.Namespace) -> list[Path]:
     """
     Export both held-out splits without retraining or modifying the selected run.
     """
-    args.run_dir = args.run_dir.resolve()
+    args.run_dir = resolve_run_dir(args)
     args.dataset_dir = args.dataset_dir.resolve()
     args.output_dir = args.output_dir.resolve()
+
     with (args.run_dir / "args.yaml").open() as stream:
         run_settings = yaml.safe_load(stream)
     if not isinstance(run_settings, dict):
         raise ValueError("Run args.yaml must contain an object")
+
+    if run_settings.get("smoke_run"):
+        raise ValueError("Smoke runs are not allowed.")
+
     if (
-        run_settings.get("smoke_run")
-        or run_settings.get("train_batch_limit") is not None
+        run_settings.get("train_batch_limit") is not None
         or float(run_settings.get("fraction", 1.0)) != 1.0
     ):
-        raise ValueError(
-            "Smoke/truncated training cannot enter the baseline comparison"
-        )
+        raise ValueError("Truncated training runs are not allowed.")
+
     if args.resolution <= 0 or args.resolution % 32:
         raise ValueError("YOLO comparison resolution must be a positive multiple of 32")
+
     trained_path = Path(str(run_settings.get("data", run_settings.get("dataset", ""))))
     trained_name = (
         trained_path.parent.name
@@ -228,7 +336,7 @@ def export(args: argparse.Namespace) -> list[Path]:
     ):
         raise ValueError("Expected a one-class basketball dataset")
     category_id = train_annotations["categories"][0]["id"]
-    model_name = "yolo11n" if args.model == "ultralytics" else "yolox_tiny"
+    model_name = MODEL_SPECS[args.model].artifact_name
     split_annotations = {}
     for split in splits:
         for kind in ("predictions", "metrics"):
@@ -312,9 +420,16 @@ def export(args: argparse.Namespace) -> list[Path]:
 
 def main() -> None:
     """
-    Run an explicitly selected export and print the resulting portable artifact paths.
+    Run one selected export and print its resolved run and portable artifacts.
     """
-    for path in export(parse_args()):
+    args = parse_args()
+    automatic_run = args.run_dir is None
+    args.run_dir = resolve_run_dir(args)
+
+    if automatic_run:
+        print(f"Using newest exportable run: {args.run_dir}")
+
+    for path in export(args):
         print(path)
 
 

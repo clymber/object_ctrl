@@ -238,35 +238,30 @@ same worker directly from the repository root:
 
 ### Export the existing YOLO baselines
 
-Use the existing `.venv-renku` interpreter and explicitly choose each saved
-large-dataset run. Review its `args.yaml`, `results.csv`, and best checkpoint
-before running these examples; adjust the run paths to the intended results:
+Export nb02.02 (YOLO11n), nb03.02 (YOLOX-Tiny), and nb03.03 (YOLOX-Nano)
+with one command:
 
 ```bash
-.venv-renku/bin/python scripts/export_basketball_predictions.py \
-  --model ultralytics \
-  --run-dir outputs/runs/basketball/yolo11n_basketball_large_dataset \
-  --dataset-dir datasets/composed/coco_basketball_11501_1156_1395 \
-  --output-dir outputs/comparisons/basketball_large_dataset/baselines \
-  --device cuda:0 --resolution 640
-
-.venv-renku/bin/python scripts/export_basketball_predictions.py \
-  --model yolox \
-  --run-dir outputs/runs/basketball/yolox_tiny_basketball_large_dataset \
-  --dataset-dir datasets/composed/coco_basketball_11501_1156_1395 \
-  --output-dir outputs/comparisons/basketball_large_dataset/baselines \
-  --device cuda:0 --resolution 640
+bash scripts/export_basketball_baselines.sh
 
 export RFDETR_BASELINE_EXPORT_DIR=\
 "$PWD/outputs/comparisons/basketball_large_dataset/baselines"
 ```
 
+For each model, the exporter finds directories matching its notebook run name
+under `outputs/runs/basketball`, excludes incomplete and evaluation-only
+directories, and selects the one with the newest directory modification time.
+Pass `--run-dir` to `export_basketball_predictions.py` to select an exact run.
+The wrapper defaults can also be changed with `BASKETBALL_RUNS_DIR`,
+`BASKETBALL_DATASET_DIR`, `BASKETBALL_EXPORT_DIR`,
+`BASKETBALL_EXPORT_DEVICE`, and `BASKETBALL_EXPORT_RESOLUTION`.
+
 The exporter loads `weights/best.pt` or `weights/best_ckpt.pth`, exports both
-validation and test predictions by default, and never retrains. Existing
-export files are not overwritten; choose another output directory for a new
-comparison. Set `RFDETR_BASELINE_EXPORT_DIR` before notebook execution, or
-rerun in evaluation mode after exporting. Missing baseline exports appear as
-unavailable rather than fabricated scores.
+validation and test predictions by default, and never retrains. Existing export
+files are not overwritten; choose another output directory for a new comparison.
+Set `RFDETR_BASELINE_EXPORT_DIR` before notebook execution, or rerun in evaluation
+mode after exporting. Missing baseline exports appear as unavailable rather than
+fabricated scores.
 
 The notebook recomputes all three models' metrics with one COCO evaluator:
 AP at score >= 0.001 and `maxDets=[1,10,100]`, plus precision/recall/F1 at

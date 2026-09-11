@@ -2026,7 +2026,7 @@ def predict_image(
     exp: BasketballTinyExp,
     image: np.ndarray,
     device: torch.device,
-    dataset: COCODataset,
+    class_ids: Sequence[int],
     conf_threshold: float = 0.25,
 ) -> list[dict[str, Any]]:
     """
@@ -2059,7 +2059,7 @@ def predict_image(
 
     predictions = []
     for index in range(bboxes_xywh.shape[0]):
-        category_id = dataset.class_ids[int(cls[index])]
+        category_id = class_ids[int(cls[index])]
         predictions.append(
             {
                 "category_id": int(category_id),
@@ -2099,7 +2099,7 @@ def save_sample_visualizations(
 
         annotation_ids = dataset.coco.getAnnIds(imgIds=[int(image_id)], iscrowd=False)
         annotations = dataset.coco.loadAnns(annotation_ids)
-        predictions = predict_image(model, exp, image, device, dataset)
+        predictions = predict_image(model, exp, image, device, dataset.class_ids)
 
         label_images.append(
             draw_boxes(

@@ -17,8 +17,9 @@
 # # RF-DETR Small on the Large Basketball Dataset
 #
 # Fine-tune COCO-pretrained **RF-DETR Small** on the frozen dataset used by
-# [nb02.02 (YOLO11n)](nb02.02-ultra_yolo11n_large_basketball.py) and
-# [nb03.02 (YOLOX-Tiny)](nb03.02-yolox_tiny_large_basketball.py).
+# [nb02.02 (YOLO11n)](nb02.02-ultra_yolo11n_large_basketball.py),
+# [nb03.02 (YOLOX-Tiny)](nb03.02-yolox_tiny_large_basketball.py), and
+# [nb03.03 (YOLOX-Nano)](nb03.03-yolox_nano_large_basketball.py).
 # This notebook follows the same workflow: train, inspect curves, reload the
 # best validation checkpoint, export ONNX, evaluate the held-out test set, and
 # review images.
@@ -314,7 +315,7 @@ for split in ("val", "test"):
 # or retraining are needed here. Missing exports appear as unavailable;
 # artifacts with a different annotation hash or smoke identity are rejected.
 #
-# The comparison recomputes all three sets of metrics with one evaluator.
+# The comparison recomputes all four sets of metrics with one evaluator.
 # Treat these as preliminary fine-tuning experiments: batch size, actual
 # epochs, seeds, augmentations, and architecture differ. Timing is enabled by
 # default; set `RFDETR_BENCHMARK=0` to skip it. Records use batch-one FP32
@@ -343,7 +344,7 @@ else:
         artifacts = {
             model: baseline_dir / f"{model}_{split}_predictions.json"
             if baseline_dir else None
-            for model in ("yolo11n", "yolox_tiny")
+            for model in ("yolo11n", "yolox_tiny", "yolox_nano")
         }
         artifacts["rfdetr_small"] = prediction_artifacts[split]
         write_comparison(
