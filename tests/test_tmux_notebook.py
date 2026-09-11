@@ -51,7 +51,8 @@ from pathlib import Path
 
 keys = {
     "RFDETR_MODE", "RFDETR_SMOKE", "RFDETR_RUN_DIR", "RFDETR_BENCHMARK",
-    "RFDETR_EXTRA", "RFDETR_STALE", "YOLOX_TINY_SMOKE", "ULTRALYTICS_WORKERS",
+    "RFDETR_EXTRA", "RFDETR_STALE", "YOLOX_NANO_SMOKE", "YOLOX_TINY_SMOKE",
+    "ULTRALYTICS_WORKERS",
     "HF_HOME", "TORCH_HOME", "PYTHONPATH", "PYTHONHOME", "NOTEBOOK_KERNEL",
     "VIRTUAL_ENV", "CUDA_VISIBLE_DEVICES",
 }
@@ -76,12 +77,15 @@ if arguments[0] == "has-session":
 assert arguments[0] == "new-session", arguments
 server = {
     key: value for key, value in os.environ.items()
-    if not key.startswith(("RFDETR_", "YOLOX_TINY_", "ULTRALYTICS_"))
+    if not key.startswith(
+        ("RFDETR_", "YOLOX_NANO_", "YOLOX_TINY_", "ULTRALYTICS_")
+    )
 }
 server.update({
     "RFDETR_MODE": "resume", "RFDETR_SMOKE": "stale-smoke",
     "RFDETR_RUN_DIR": "stale-run", "RFDETR_STALE": "old-server-only",
-    "YOLOX_TINY_SMOKE": "1", "ULTRALYTICS_WORKERS": "77",
+    "YOLOX_NANO_SMOKE": "stale-nano", "YOLOX_TINY_SMOKE": "1",
+    "ULTRALYTICS_WORKERS": "77",
     "HF_HOME": "/old/server/cache", "TORCH_HOME": "/old/server/torch",
     "PYTHONPATH": "/old/server/packages", "CUDA_VISIBLE_DEVICES": "99",
 })
@@ -96,7 +100,9 @@ raise SystemExit(result.returncode)
     caller = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(("RFDETR_", "YOLOX_TINY_", "ULTRALYTICS_"))
+        if not key.startswith(
+            ("RFDETR_", "YOLOX_NANO_", "YOLOX_TINY_", "ULTRALYTICS_")
+        )
         and key
         not in {
             "HF_HOME",
@@ -181,6 +187,7 @@ def test_tmux_unsets_absent_controls_from_old_server(notebook_launcher) -> None:
         "RFDETR_SMOKE",
         "RFDETR_RUN_DIR",
         "RFDETR_STALE",
+        "YOLOX_NANO_SMOKE",
         "YOLOX_TINY_SMOKE",
         "ULTRALYTICS_WORKERS",
         "HF_HOME",

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run notebooks 02.01 through 03.02 sequentially in tmux sessions.
+# Run notebooks 02.01 through 03.03 sequentially in tmux sessions.
 
 set -euo pipefail
 
@@ -14,18 +14,21 @@ readonly SESSION_NAMES=(
     "nb02_02"
     "nb03_01"
     "nb03_02"
+    "nb03_03"
 )
 readonly NOTEBOOK_NAMES=(
     "nb02.01-ultralytics_yolo11n_on_basketball.ipynb"
     "nb02.02-ultra_yolo11n_large_basketball.ipynb"
     "nb03.01-yolox_tiny_on_basketball.ipynb"
     "nb03.02-yolox_tiny_large_basketball.ipynb"
+    "nb03.03-yolox_nano_large_basketball.ipynb"
 )
 
 clear_experiment_environment() {
     local variable_name
 
-    for variable_name in "${!YOLOX_TINY_@}" "${!ULTRALYTICS_@}"; do
+    for variable_name in "${!YOLOX_NANO_@}" "${!YOLOX_TINY_@}" \
+        "${!ULTRALYTICS_@}"; do
         unset "$variable_name"
     done
 }
@@ -54,8 +57,11 @@ for index in "${!NOTEBOOK_NAMES[@]}"; do
     notebook_name="${NOTEBOOK_NAMES[$index]}"
     session_name="${SESSION_NAMES[$index]}"
 
+    printf "Beginning session %s\n" ${session_name}
     "${SCRIPT_DIR}/tmux_notebook.sh" run \
         --file "${PROJECT_ROOT}/notebooks/$notebook_name" \
         --session "$session_name"
     wait_for_notebook "$session_name"
+    tmux kill-session -t "$session_name"
+    printf "Finished session %s\n" ${session_name}
 done

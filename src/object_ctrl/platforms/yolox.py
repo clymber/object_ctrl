@@ -51,6 +51,7 @@ from yolox.data import (
     worker_init_reset_seed,
 )
 from yolox.exp import Exp as YOLOXExp
+from yolox.models import YOLOX, YOLOPAFPN
 from yolox.models.losses import IOUloss
 from yolox.models.network_blocks import SiLU as YOLOXSiLU
 import yolox.models.yolo_head as yolox_yolo_head
@@ -65,6 +66,10 @@ BASKETBALL_CLASSES = ("basketball",)
 YOLOX_TINY_WEIGHTS_URL = (
     "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/"
     "0.1.1rc0/yolox_tiny.pth"
+)
+YOLOX_NANO_WEIGHTS_URL = (
+    "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/"
+    "0.1.1rc0/yolox_nano.pth"
 )
 
 
@@ -209,6 +214,69 @@ class BasketballTinyExp(YOLOXExp):
         return self.input_size
 
 
+class BasketballNanoExp(BasketballTinyExp):
+    """
+    YOLOX-Nano experiment configuration for the basketball COCO dataset.
+    """
+
+    def __init__(
+        self,
+        dataset_dir: Path,
+        output_dir: Path,
+        max_epoch: int,
+        image_size: int,
+        project_name: str,
+        class_names: tuple[str, ...] = BASKETBALL_CLASSES,
+        seed: int = 42,
+        workers: int = 0,
+    ) -> None:
+        """
+        Configure YOLOX-Nano for one-class basketball detection.
+        """
+        super().__init__(
+            dataset_dir=dataset_dir,
+            output_dir=output_dir,
+            max_epoch=max_epoch,
+            image_size=image_size,
+            project_name=project_name,
+            class_names=class_names,
+            seed=seed,
+            workers=workers,
+        )
+        self.width = 0.25
+        self.depthwise = True
+
+    def get_model(self) -> YOLOX:
+        """
+        Build the depthwise YOLOX-Nano network.
+        """
+        if getattr(self, "model", None) is None:
+            in_channels = [256, 512, 1024]
+            backbone = YOLOPAFPN(
+                self.depth,
+                self.width,
+                in_channels=in_channels,
+                depthwise=True,
+                act=self.act,
+            )
+            head = YOLOXHead(
+                self.num_classes,
+                self.width,
+                in_channels=in_channels,
+                depthwise=True,
+                act=self.act,
+            )
+            self.model = YOLOX(backbone, head)
+
+        for module in self.model.modules():
+            if isinstance(module, torch.nn.BatchNorm2d):
+                module.eps = 1e-3
+                module.momentum = 0.03
+        self.model.head.initialize_biases(1e-2)
+        self.model.train()
+        return self.model
+
+
 def env_int(name: str, default: int) -> int:
     """
     Read an integer setting from the environment.
@@ -245,24 +313,25 @@ def training_settings_from_env(
     default_batch_size: int = 8,
     default_image_size: int = 640,
     default_seed: int = 42,
+    env_prefix: str = "YOLOX_TINY",
 ) -> TrainingSettings:
     """
     Read notebook training settings from environment variables.
     """
-    smoke_run = os.environ.get("YOLOX_TINY_SMOKE", "0") == "1"
+    smoke_run = os.environ.get(f"{env_prefix}_SMOKE", "0") == "1"
     return TrainingSettings(
-        epochs=env_int("YOLOX_TINY_EPOCHS", 1 if smoke_run else default_epochs),
-        batch_size=env_int("YOLOX_TINY_BATCH_SIZE", default_batch_size),
+        epochs=env_int(f"{env_prefix}_EPOCHS", 1 if smoke_run else default_epochs),
+        batch_size=env_int(f"{env_prefix}_BATCH_SIZE", default_batch_size),
         train_batch_limit=env_optional_int(
-            "YOLOX_TINY_TRAIN_BATCH_LIMIT",
+            f"{env_prefix}_TRAIN_BATCH_LIMIT",
             2 if smoke_run else None,
         ),
-        image_size=env_int("YOLOX_TINY_IMAGE_SIZE", default_image_size),
-        seed=env_int("YOLOX_TINY_SEED", default_seed),
+        image_size=env_int(f"{env_prefix}_IMAGE_SIZE", default_image_size),
+        seed=env_int(f"{env_prefix}_SEED", default_seed),
         smoke_run=smoke_run,
-        show_progress=os.environ.get("YOLOX_TINY_PROGRESS", "0") == "1",
-        verbose_output=os.environ.get("YOLOX_TINY_VERBOSE", "0") == "1",
-        resume_run_dir=env_optional_path("YOLOX_TINY_RESUME_RUN"),
+        show_progress=os.environ.get(f"{env_prefix}_PROGRESS", "0") == "1",
+        verbose_output=os.environ.get(f"{env_prefix}_VERBOSE", "0") == "1",
+        resume_run_dir=env_optional_path(f"{env_prefix}_RESUME_RUN"),
     )
 
 
@@ -442,7 +511,7 @@ def patch_mps_compatibility() -> None:
 
 def ensure_pretrained_checkpoint(path: Path, url: str = YOLOX_TINY_WEIGHTS_URL) -> Path:
     """
-    Download the pretrained YOLOX-Tiny checkpoint if it is not cached yet.
+    Download a pretrained YOLOX checkpoint if it is not cached yet.
     """
     return cache_download(path, url)
 
@@ -1406,7 +1475,7 @@ def write_training_history(
             temporary_path.unlink(missing_ok=True)
 
 
-def fit_yolox_tiny(
+def fit_yolox(
     exp: BasketballTinyExp,
     checkpoint_path: Path,
     output_dir: Path,
@@ -1419,7 +1488,7 @@ def fit_yolox_tiny(
     resume: bool = False,
 ) -> pd.DataFrame:
     """
-    Fine-tune YOLOX-Tiny and save history/checkpoint artifacts.
+    Fine-tune a YOLOX experiment and save history/checkpoint artifacts.
     """
     set_reproducibility(exp.seed or settings.seed)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1634,6 +1703,62 @@ def fit_yolox_tiny(
         finish_validation(completed_epoch, train_metrics)
 
     return pd.DataFrame(history)
+
+
+def fit_yolox_tiny(
+    exp: BasketballTinyExp,
+    checkpoint_path: Path,
+    output_dir: Path,
+    dataset_dir: Path,
+    settings: TrainingSettings,
+    device: torch.device,
+    project_root: Path,
+    class_names: tuple[str, ...] = BASKETBALL_CLASSES,
+    *,
+    resume: bool = False,
+) -> pd.DataFrame:
+    """
+    Fine-tune YOLOX-Tiny and save history/checkpoint artifacts.
+    """
+    return fit_yolox(
+        exp,
+        checkpoint_path,
+        output_dir,
+        dataset_dir,
+        settings,
+        device,
+        project_root,
+        class_names,
+        resume=resume,
+    )
+
+
+def fit_yolox_nano(
+    exp: BasketballNanoExp,
+    checkpoint_path: Path,
+    output_dir: Path,
+    dataset_dir: Path,
+    settings: TrainingSettings,
+    device: torch.device,
+    project_root: Path,
+    class_names: tuple[str, ...] = BASKETBALL_CLASSES,
+    *,
+    resume: bool = False,
+) -> pd.DataFrame:
+    """
+    Fine-tune YOLOX-Nano and save history/checkpoint artifacts.
+    """
+    return fit_yolox(
+        exp,
+        checkpoint_path,
+        output_dir,
+        dataset_dir,
+        settings,
+        device,
+        project_root,
+        class_names,
+        resume=resume,
+    )
 
 
 def print_epoch_summary(record: dict[str, float]) -> None:

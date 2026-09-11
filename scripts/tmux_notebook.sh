@@ -131,7 +131,8 @@ capture_notebook_environment() {
     # A pre-existing tmux server does not inherit the invoking shell's settings.
     # Clear old experiment controls inside this pane, then replay caller values.
     notebook_environment='unset PYTHONHOME PYTHONPATH; '
-    notebook_environment+='for key in ${!RFDETR_@} ${!YOLOX_TINY_@} '
+    notebook_environment+='for key in ${!RFDETR_@} ${!YOLOX_NANO_@} '
+    notebook_environment+='${!YOLOX_TINY_@} '
     notebook_environment+='${!ULTRALYTICS_@}; do unset "$key"; done; '
 
     local key assignment
@@ -144,7 +145,8 @@ capture_notebook_environment() {
         HF_HUB_DISABLE_TELEMETRY HF_HUB_OFFLINE TRANSFORMERS_OFFLINE
         JUPYTER_RUNTIME_DIR IPYTHONDIR
     )
-    for key in "${settings[@]}" ${!RFDETR_@} ${!YOLOX_TINY_@} ${!ULTRALYTICS_@}; do
+    for key in "${settings[@]}" ${!RFDETR_@} ${!YOLOX_NANO_@} \
+        ${!YOLOX_TINY_@} ${!ULTRALYTICS_@}; do
         if [[ ${!key+x} ]]; then
             printf -v assignment 'export %s=%q; ' "$key" "${!key}"
         else

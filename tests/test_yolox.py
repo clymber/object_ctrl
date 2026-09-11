@@ -314,6 +314,49 @@ def test_training_settings_default_to_fresh_run() -> None:
     assert make_settings().run_mode is yolox.RunMode.FRESH
 
 
+def test_nano_training_settings_use_an_independent_environment_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Read Nano controls without inheriting values intended for Tiny runs.
+    """
+    monkeypatch.setenv("YOLOX_TINY_EPOCHS", "99")
+    monkeypatch.setenv("YOLOX_NANO_EPOCHS", "12")
+    monkeypatch.setenv("YOLOX_NANO_BATCH_SIZE", "4")
+    monkeypatch.setenv("YOLOX_NANO_SMOKE", "0")
+
+    settings = yolox.training_settings_from_env(env_prefix="YOLOX_NANO")
+
+    assert settings.epochs == 12
+    assert settings.batch_size == 4
+    assert not settings.smoke_run
+
+
+def test_basketball_nano_uses_official_nano_model_geometry(tmp_path: Path) -> None:
+    """
+    Configure Nano with its narrower depthwise architecture and shared image size.
+    """
+    exp = yolox.BasketballNanoExp(
+        dataset_dir=tmp_path / "dataset",
+        output_dir=tmp_path / "outputs",
+        max_epoch=100,
+        image_size=640,
+        project_name="nano-test",
+    )
+
+    assert exp.depth == pytest.approx(0.33)
+    assert exp.width == pytest.approx(0.25)
+    assert exp.depthwise
+    assert exp.input_size == (640, 640)
+    assert exp.test_size == (640, 640)
+    assert yolox.YOLOX_NANO_WEIGHTS_URL.endswith("/yolox_nano.pth")
+
+    model = exp.get_model()
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+
+    assert parameter_count < 1_000_000
+
+
 def test_checkpoint_restores_complete_training_state(tmp_path: Path) -> None:
     """
     Restore raw, EMA, optimizer, scheduler, history, and phase state exactly.
